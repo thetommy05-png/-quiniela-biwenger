@@ -6,7 +6,7 @@ from functools import wraps
 import requests
 from flask import Flask, request, redirect, url_for, session, jsonify, send_from_directory, render_template_string
 
-app = Flask(__name__, static_folder="static", static_url_path="/static")
+app = Flask(__name__, static_folder=None)
 app.secret_key = os.getenv("SECRET_KEY", "cambia-esta-clave-en-produccion")
 
 DB = os.getenv("DATABASE_PATH", "quiniela.db")
@@ -128,9 +128,13 @@ def home():
         return redirect(url_for("login"))
     return send_from_directory(".", "index.html")
 
-@app.route("/static/<path:filename>")
-def static_files(filename):
-    return send_from_directory(app.static_folder, filename)
+@app.route("/style.css")
+def css_file():
+    return send_from_directory(".", "style.css")
+
+@app.route("/rfmf_logo.svg")
+def logo_file():
+    return send_from_directory(".", "rfmf_logo.svg")
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
