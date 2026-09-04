@@ -1,22 +1,21 @@
-QUINIELA MEDIAMARKERA – V6
+QUINIELA MEDIAMARKERA — VERSIÓN DEFINITIVA
 
-Esta versión sincroniza automáticamente el calendario y resultados de LaLiga mediante el feed público sin clave de ESPN. No requiere API de pago ni variable de API.
+Sube este contenido a Railway.
 
-FUNCIONAMIENTO
-- Al arrancar y periódicamente, la aplicación consulta el calendario completo de LaLiga 2026/27.
-- Las jornadas y horarios se crean/actualizan automáticamente.
-- Los resultados y marcadores se actualizan automáticamente.
-- El cierre de una jornada se produce automáticamente al comenzar el primer partido de esa jornada.
-- Una vez iniciado el primer partido, NINGÚN jugador puede modificar ningún pronóstico de esa jornada.
-- El servidor impone el bloqueo; no depende solo de la interfaz.
-- El administrador mantiene acceso a gestión de usuarios, contraseñas, apuestas y resultados.
+FUNCIONAMIENTO:
+- El calendario de LaLiga 2026/2027 se sincroniza automáticamente desde una fuente pública de resultados.
+- Horarios y resultados no los introduce el administrador.
+- El cierre es automático: cuando comienza el primer partido de una jornada, se bloquean TODOS los partidos de esa jornada para TODOS los usuarios.
+- Login con desplegable de usuarios.
+- Interfaz optimizada para móvil y sin zoom exagerado.
+- /health sirve para comprobar que la aplicación está viva.
 
-RAILWAY
-1. Sustituye los archivos del proyecto por los del ZIP.
-2. No borres PostgreSQL ni sus datos.
-3. No necesitas ninguna API_KEY.
-4. Railway debe tener DATABASE_URL y SECRET_KEY como variables.
-5. El comando de arranque es el del Procfile.
+RAILWAY:
+1. Conecta este proyecto/ZIP a tu servicio.
+2. Mantén DATABASE_URL si ya tienes PostgreSQL.
+3. Mantén SECRET_KEY si ya existe.
+4. Si es una instalación nueva, la contraseña inicial de todos los usuarios es 1234.
+5. Railway detecta Python y Procfile automáticamente; también puedes fijar Start Command a: gunicorn app:app
 
-NOTA
-El feed de ESPN es público y sin clave, pero es un endpoint no documentado oficialmente por ESPN. La aplicación tiene tolerancia a fallos: si el proveedor no responde, la web sigue usando los datos guardados y reintenta automáticamente.
+IMPORTANTE:
+Esta versión usa tablas con prefijo qm_ para no destruir tablas antiguas accidentalmente.
