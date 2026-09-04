@@ -123,5 +123,23 @@ document.getElementById("prev").onclick=()=>{if(round>5){round--;document.getEle
 document.getElementById("next").onclick=()=>{if(round<38){round++;document.getElementById("summary").classList.add("hidden");load()}};
 load(); setInterval(load,60000);
 </script>
+
+<script>
+/* Actualización de resultados en directo cada 15 segundos. */
+setInterval(async () => {
+  try {
+    if (typeof loadMatches === "function") {
+      await loadMatches();
+    } else if (typeof load === "function") {
+      await load();
+    } else if (typeof fetchMatches === "function") {
+      await fetchMatches();
+    }
+  } catch (e) {
+    console.warn("Actualización en directo:", e);
+  }
+}, 15000);
+</script>
+
 </body>
 </html>

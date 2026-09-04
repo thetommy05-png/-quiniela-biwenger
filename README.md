@@ -18,3 +18,7 @@ La aplicación:
 - obtiene partidos y resultados desde API-Football;
 - permite ver aciertos, fallos, pendientes y premio acumulado;
 - refresca los partidos cada 60 segundos.
+
+
+## Resultados en directo
+La aplicación usa SofaScore para obtener partidos y marcadores de LaLiga 2026/27 sin API key. Los resultados se refrescan periódicamente desde el frontend.

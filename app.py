@@ -10,12 +10,13 @@ app = Flask(__name__, static_folder=None)
 app.secret_key = os.getenv("SECRET_KEY", "cambia-esta-clave-en-produccion")
 
 DB = os.getenv("DATABASE_PATH", "quiniela.db")
-API_KEY = os.getenv("API_FOOTBALL_KEY") or os.getenv("API_FOOTBALL")
-API_URL = "https://v3.football.api-sports.io"
-LEAGUE_ID = 140  # LaLiga
-SEASON = int(os.getenv("FOOTBALL_SEASON", "2026"))  # temporada 2026/27
+# Resultados en directo mediante SofaScore (sin API key)
+SOFASCORE_URL = "https://www.sofascore.com/api/v1"
+TOURNAMENT_ID = 8       # LaLiga
+SEASON_ID = 97268       # 2026/27
 START_ROUND = 5
 PRIZE_PER_HIT = 100_000
+
 
 LOGIN_HTML = """<!doctype html><html lang=\"es\"><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>Quiniela Mediamarkera</title><style>
@@ -49,81 +50,76 @@ def outcome(home, away):
 
 
 def fixture_matches(round_no):
-    """Get one LaLiga matchday from API-Football.
-
-    API-Football documents /fixtures as the source for scores/statuses and says
-    live fixture data is updated roughly every 15 seconds.
-    """
-    if not API_KEY:
-        return [], "API_FOOTBALL_KEY no configurada en Railway."
-
+    """Obtiene los partidos y marcadores de LaLiga desde SofaScore."""
     try:
         r = requests.get(
-            f"{API_URL}/fixtures",
-            headers={"x-apisports-key": API_KEY, "Accept": "application/json"},
-            params={
-                "league": LEAGUE_ID,
-                "season": SEASON,
-                "round": f"Regular Season - {round_no}",
-                "timezone": "Europe/Madrid",
-            },
-            timeout=12,
+            f"{SOFASCORE_URL}/unique-tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events/round/{round_no}",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=15,
         )
         r.raise_for_status()
         payload = r.json()
-        errors = payload.get("errors") or {}
-        if errors:
-            return [], f"API-Football: {errors}"
-
-        response = payload.get("response", [])
         out = []
-        for x in response:
-            f = x.get("fixture") or {}
-            teams = x.get("teams") or {}
-            goals = x.get("goals") or {}
-            status_obj = f.get("status") or {}
-            status = status_obj.get("short") or "NS"
-            elapsed = status_obj.get("elapsed")
-            hg, ag = goals.get("home"), goals.get("away")
-            finished = status in {"FT", "AET", "PEN"}
-            live = status in {"1H", "HT", "2H", "ET", "BT", "P"}
-            status_label = {
-                "NS": "Próximo",
-                "TBD": "Por confirmar",
-                "1H": "En juego",
-                "HT": "Descanso",
-                "2H": "En juego",
-                "ET": "Prórroga",
-                "BT": "Descanso prórroga",
-                "P": "Penaltis",
-                "FT": "Finalizado",
-                "AET": "Finalizado",
-                "PEN": "Finalizado",
-                "PST": "Aplazado",
-                "CANC": "Cancelado",
-                "SUSP": "Suspendido",
-            }.get(status, status)
+
+        for event in payload.get("events", []):
+            home = event.get("homeTeam") or {}
+            away = event.get("awayTeam") or {}
+            status = event.get("status") or {}
+            hs = event.get("homeScore") or {}
+            aws = event.get("awayScore") or {}
+
+            status_type = status.get("type", "")
+            finished = status_type == "finished"
+            live = status_type in {"inprogress", "in_progress"}
+
+            if finished:
+                label = "Finalizado"
+            elif live:
+                label = "EN DIRECTO"
+            elif status_type == "postponed":
+                label = "Aplazado"
+            elif status_type == "canceled":
+                label = "Cancelado"
+            else:
+                label = "Próximo"
+
+            time_obj = event.get("time") or {}
+            elapsed = time_obj.get("current") or time_obj.get("played")
+
+            ts = event.get("startTimestamp")
+            date_iso = (
+                datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                if ts else None
+            )
 
             out.append({
-                "id": str(f.get("id")),
-                "home": (teams.get("home") or {}).get("name", ""),
-                "away": (teams.get("away") or {}).get("name", ""),
-                "home_logo": (teams.get("home") or {}).get("logo"),
-                "away_logo": (teams.get("away") or {}).get("logo"),
-                "date": f.get("date"),
-                "home_goals": hg,
-                "away_goals": ag,
-                "status": status,
-                "status_label": status_label,
+                "id": str(event.get("id")),
+                "home": home.get("name", ""),
+                "away": away.get("name", ""),
+                "home_logo": (
+                    f"https://api.sofascore.com/api/v1/team/{home.get('id')}/image"
+                    if home.get("id") else None
+                ),
+                "away_logo": (
+                    f"https://api.sofascore.com/api/v1/team/{away.get('id')}/image"
+                    if away.get("id") else None
+                ),
+                "date": date_iso,
+                "home_goals": hs.get("current"),
+                "away_goals": aws.get("current"),
+                "status": status_type,
+                "status_label": label,
                 "elapsed": elapsed,
                 "finished": finished,
                 "live": live,
             })
+
         out.sort(key=lambda m: m.get("date") or "")
         return out, None
+
     except Exception as e:
-        app.logger.warning("API-Football: %s", e)
-        return [], f"No se pudo consultar API-Football: {e}"
+        app.logger.warning("SofaScore: %s", e)
+        return [], f"No se pudieron obtener los resultados: {e}"
 
 
 def get_matches(round_no):
@@ -190,7 +186,7 @@ def api_matches():
         "jornada": rn,
         "matches": matches,
         "prize_per_hit": PRIZE_PER_HIT,
-        "api_configured": bool(API_KEY),
+        "api_configured": True,
         "api_error": api_error,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
@@ -204,15 +200,22 @@ def api_save():
     predictions = data.get("predictions", {})
     matches, _ = get_matches(rn)
     valid_ids = {m["id"] for m in matches}
+    # Si la fuente está temporalmente caída, no bloqueamos una apuesta ya enviada.
+    # Los IDs enviados por el frontend se consideran válidos para la jornada.
+    if not valid_ids:
+        valid_ids = {str(mid) for mid in predictions.keys()}
+
     c = db()
+    saved = 0
     for mid, pick in predictions.items():
-        if mid in valid_ids and pick in {"1", "X", "2"}:
+        if str(mid) in valid_ids and pick in {"1", "X", "2"}:
             c.execute(
                 "INSERT OR REPLACE INTO bets(username,round,match_id,pick) VALUES(?,?,?,?)",
-                (session["user"], rn, mid, pick),
+                (session["user"], rn, str(mid), pick),
             )
+            saved += 1
     c.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": saved > 0, "saved": saved})
 
 
 @app.route("/api/check")
