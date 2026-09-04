@@ -1,16 +1,20 @@
 # Quiniela Mediamarkera
 
-Sube todo el contenido de esta carpeta al repositorio de Railway.
+## Estructura
+No utiliza `templates/` ni `static/` para plantillas Flask. `index.html` está en la raíz y los recursos CSS/logo están en `static/`.
 
-Variables:
-- `API_FOOTBALL_KEY` = tu clave de API-Football (la que ya tienes).
-- `FOOTBALL_SEASON` = 2026 (por defecto).
-- `FOOTBALL_ROUND` = Regular Season - 5 (por defecto).
+## Railway
+Variables recomendadas:
+- `API_FOOTBALL_KEY`: clave de API-Football.
+- `FOOTBALL_SEASON`: `2026`.
+- `ADMIN_PASSWORD`: contraseña de acceso (si no se define: `biwenger2026`).
+- `SECRET_KEY`: una clave larga aleatoria.
+- `DATABASE_PATH`: opcional.
 
-La app:
+La aplicación:
 - empieza en Jornada 5;
-- suma 100.000 € por acierto;
-- guarda la apuesta en el navegador;
-- consulta resultados de LaLiga mediante API-Football;
-- recalcula el premio acumulado con el botón Resumen;
-- actualiza los partidos cada 60 segundos.
+- 100.000 € por acierto;
+- guarda las apuestas en SQLite;
+- obtiene partidos y resultados desde API-Football;
+- permite ver aciertos, fallos, pendientes y premio acumulado;
+- refresca los partidos cada 60 segundos.
