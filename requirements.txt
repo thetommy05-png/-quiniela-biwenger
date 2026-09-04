@@ -1,4 +1,4 @@
 Flask>=3.0,<4
 requests>=2.31,<3
 psycopg[binary]>=3.2,<4
-gunicorn>=23,<24
+gunicorn==22.0.0
