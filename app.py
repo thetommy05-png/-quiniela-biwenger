@@ -29,7 +29,7 @@ def db():
     c.execute("""CREATE TABLE IF NOT EXISTS bets(
         username TEXT, round INTEGER, match_id TEXT, pick TEXT,
         PRIMARY KEY(username,round,match_id))""")
-    c.execute("INSERT OR IGNORE INTO users(username,password,is_admin,active) VALUES(?,?,?,?,?)",
+    c.execute("INSERT OR IGNORE INTO users(username,password,is_admin,active) VALUES(?,?,?,?)",
               (ADMIN_USER, ADMIN_PASSWORD, 1, 1))
     c.commit(); return c
 
