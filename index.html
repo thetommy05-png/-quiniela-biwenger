@@ -27,7 +27,7 @@
 
   <section class="prize">
     <div><small>PREMIO POR ACIERTO</small><strong>100.000 €</strong></div>
-    <div class="live">● RESULTADOS EN TIEMPO REAL</div>
+    <div class="live" id="liveText">● RESULTADOS EN TIEMPO REAL</div>
   </section>
 
   <div class="quick">
@@ -58,6 +58,7 @@
 
 <script>
 let round=5, matches=[];
+let apiError=null;
 const state={};
 const eur=n=>new Intl.NumberFormat("es-ES").format(n)+" €";
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -69,7 +70,10 @@ function render(){
  matches.forEach((m,i)=>{
   const p=getPred(m.id), actual=outcome(m);
   let label="PENDIENTE", cls="pending";
-  if(actual){ if(p===actual){label="✓ ACIERTO · +100.000 €";cls="hit"} else if(p){label="✕ FALLADO";cls="miss"} else {label="RESULTADO";cls="result"}}
+  if(m.live){ label=(m.status_label||"EN JUEGO")+(m.elapsed?" · "+m.elapsed+"'":""); cls="liveStatus"; }
+  else if(actual){ if(p===actual){label="✓ ACIERTO · +100.000 €";cls="hit"} else if(p){label="✕ FALLADO";cls="miss"} else {label="RESULTADO";cls="result"}}
+  else if(m.status==="PST"){label="APLAZADO";cls="pending"}
+  else if(m.status==="CANC"){label="CANCELADO";cls="miss"}
   const article=document.createElement("article"); article.className="match";
   article.innerHTML=`
    <div class="number">${i+1}</div>
@@ -85,7 +89,8 @@ function render(){
 async function load(){
  const r=await fetch("/api/matches?round="+round,{cache:"no-store"});
  if(!r.ok){location.href="/login";return}
- const d=await r.json(); matches=d.matches||[];
+ const d=await r.json(); apiError=d.api_error||null; matches=d.matches||[];
+ document.getElementById("liveText").textContent=apiError?"⚠ RESULTADOS NO DISPONIBLES":"● RESULTADOS EN TIEMPO REAL";
  document.getElementById("round").textContent=d.jornada;
  matches.forEach(m=>{if(!state[m.id])state[m.id]={pick:m.pick||null};});
  render();
@@ -107,6 +112,7 @@ async function results(){
  matches.forEach(m=>{const x=d.results.find(v=>v.id===m.id);if(x){m.actual=x.actual;m.score=x.score}});
  render();
  document.getElementById("summary").scrollIntoView({behavior:"smooth",block:"center"});
+ if(d.api_error) alert(d.api_error);
 }
 document.getElementById("save").onclick=save;
 document.getElementById("resultTab").onclick=results;
