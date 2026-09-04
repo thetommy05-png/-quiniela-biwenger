@@ -11,8 +11,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 try:
     import psycopg
+    from psycopg.rows import dict_row
 except ImportError:
     psycopg = None
+    dict_row = None
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "CAMBIA-ESTA-CLAVE-EN-RAILWAY")
@@ -58,9 +60,9 @@ app.config["JSON_SORT_KEYS"] = False
 
 def db():
     if DATABASE_URL:
-        if not psycopg:
+        if not psycopg or not dict_row:
             raise RuntimeError("Falta psycopg. Añádelo a requirements.txt.")
-        return psycopg.connect(DATABASE_URL)
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row)
     conn = sqlite3.connect(SQLITE_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -388,7 +390,7 @@ def sync_round(round_no):
         sql(conn, "INSERT INTO rounds(name,open) VALUES(?,?)", (f"Jornada {round_no}", True))
         conn.commit()
         rid_row = sql(conn, "SELECT id FROM rounds WHERE name=?", (f"Jornada {round_no}",)).fetchone()
-    rid = rid_row[0]
+    rid = rid_row["id"]
 
     # Upsert by external_id where possible. We never delete existing bets.
     existing = sql(conn, "SELECT id,external_id FROM matches WHERE round_id=?", (rid,)).fetchall()
@@ -426,7 +428,7 @@ def live_data(round_no):
     if not rid_row:
         conn.close()
         return [], err
-    ms = sql(conn, "SELECT * FROM matches WHERE round_id=? ORDER BY match_order", (rid_row[0],)).fetchall()
+    ms = sql(conn, "SELECT * FROM matches WHERE round_id=? ORDER BY match_order", (rid_row["id"],)).fetchall()
 
     result = []
     for dbm in ms:
@@ -469,7 +471,7 @@ def calculate_user(round_no, user_id):
     if not rid:
         conn.close()
         return {"hits": 0, "pending": 10, "errors": 0, "prize": 0, "matches": [], "api_error": api_error}
-    bets = current_bets_for_user(user_id, rid[0])
+    bets = current_bets_for_user(user_id, rid["id"])
     conn.close()
 
     hits = pending = errors = 0
@@ -591,14 +593,14 @@ def home():
         # Do not block the app if the public provider is temporarily down.
         conn = db()
         rid = sql(conn, "SELECT id FROM rounds WHERE name=?", (f"Jornada {rn}",)).fetchone()
-        matches = [dict(x) for x in sql(conn, "SELECT * FROM matches WHERE round_id=? ORDER BY match_order", (rid[0],)).fetchall()] if rid else []
+        matches = [dict(x) for x in sql(conn, "SELECT * FROM matches WHERE round_id=? ORDER BY match_order", (rid["id"],)).fetchall()] if rid else []
         conn.close()
     # Add live state.
     live, live_err = live_data(rn)
     live_by_id = {int(x["id"]): x for x in live}
     conn = db()
     rid = sql(conn, "SELECT id,open FROM rounds WHERE name=?", (f"Jornada {rn}",)).fetchone()
-    bets = current_bets_for_user(user["id"], rid[0]) if rid else {}
+    bets = current_bets_for_user(user["id"], rid["id"]) if rid else {}
     conn.close()
 
     rows = ""
