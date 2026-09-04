@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Quiniela Mediamarkera</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="hero-header">
+  <div class="hero-bg"></div>
+  <div class="hero-content">
+    <img class="rfmf" src="/static/rfmf_logo.png" alt="RFMF">
+    <div class="title-wrap">
+      <div class="title-white">QUINIELA</div>
+      <div class="title-red">MEDIAMARKERA</div>
+      <div class="subtitle">REAL FEDERACIÓN MEDIAMARKERA DE FÚTBOL</div>
+    </div>
+    <div class="account">👤 <b>RFMF</b>⌄</div>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="active">⚽<span>Jornada</span></button>
+  <button id="tabBet">📝<span>Mi apuesta</span></button>
+  <button id="tabResults">📊<span>Resumen</span></button>
+  <button>🏆<span>Clasificación</span></button>
+  <button>⚙️<span>Admin</span></button>
+</nav>
+
+<main>
+  <section class="round-head">
+    <button class="arrow">←</button>
+    <div>
+      <h1>JORNADA <span id="round">5</span></h1>
+      <p>LaLiga 2026/2027</p>
+    </div>
+    <button class="arrow">→</button>
+  </section>
+
+  <div class="open-line"><span></span> ABIERTA</div>
+
+  <section class="prize-banner">
+    <div><small>PREMIO POR ACIERTO</small><strong>100.000 €</strong></div>
+    <div class="live-dot">● EN TIEMPO REAL</div>
+  </section>
+
+  <section id="matches" class="matches"></section>
+
+  <button id="save" class="save">💾 &nbsp; Guardar mi apuesta</button>
+  <button id="view" class="view">◉ &nbsp; Ver mi apuesta</button>
+
+  <section id="summary" class="summary hidden">
+    <div class="sum-title">🏆 PREMIO ACUMULADO <strong id="prize">0 €</strong></div>
+    <div class="sum-grid">
+      <div><b id="hits">0</b><span>Aciertos</span></div>
+      <div><b id="pending">10</b><span>Pendientes</span></div>
+      <div><b id="errors">0</b><span>Fallos</span></div>
+    </div>
+  </section>
+</main>
+
+<footer class="bottom">
+  <button class="active">⚽<span>Jornada</span></button>
+  <button id="bottomBet">📝<span>Mi apuesta</span></button>
+  <button id="bottomResults">📊<span>Resumen</span></button>
+  <button>⚙️<span>Admin</span></button>
+</footer>
+
+<script>
+let matches=[];
+let predictions=JSON.parse(localStorage.getItem("qm_predictions")||"{}");
+const eur=n=>new Intl.NumberFormat("es-ES").format(n)+" €";
+const esc=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function outcome(m){
+  if(m.home_goals===null || m.away_goals===null) return null;
+  return m.home_goals>m.away_goals?"1":m.home_goals<m.away_goals?"2":"X";
+}
+function statusFor(m,i){
+  const actual=outcome(m), pred=predictions[String(i)];
+  if(!actual) return {text:"PENDIENTE",cls:"pending",score:""};
+  if(!pred) return {text:"RESULTADO",cls:"result",score:`${m.home_goals} - ${m.away_goals}`};
+  return pred===actual
+    ? {text:"✓ ACIERTO · +100.000 €",cls:"hit",score:`${m.home_goals} - ${m.away_goals}`}
+    : {text:"✕ FALLADO",cls:"miss",score:`${m.home_goals} - ${m.away_goals}`};
+}
+function logo(url,name){
+  if(url) return `<img class="team-logo" src="${esc(url)}" alt="">`;
+  return `<span class="team-logo fallback">${esc((name||"?").slice(0,2).toUpperCase())}</span>`;
+}
+function render(){
+  const root=document.getElementById("matches"); root.innerHTML="";
+  matches.forEach((m,idx)=>{
+    const i=idx+1, p=predictions[String(i)], st=statusFor(m,i);
+    const card=document.createElement("article"); card.className="match";
+    card.innerHTML=`
+      <div class="num">${i}</div>
+      <div class="date">${m.date?new Date(m.date).toLocaleDateString("es-ES",{weekday:"short",day:"2-digit",month:"2-digit"}):""}<br>${m.date?new Date(m.date).toLocaleTimeString("es-ES",{hour:"2-digit",minute:"2-digit"}):""}</div>
+      <div class="logos">${logo(m.home_logo,m.home)}${logo(m.away_logo,m.away)}</div>
+      <div class="teams"><div>${esc(m.home)}</div><div>${esc(m.away)}</div></div>
+      <div class="choices">
+        ${["1","X","2"].map(v=>`<button data-i="${i}" data-v="${v}" class="${p===v?"selected":""}">${v}</button>`).join("")}
+        <div class="result ${st.cls}">${st.score?esc(st.score)+" · ":""}${st.text}</div>
+      </div>`;
+    root.appendChild(card);
+  });
+  root.querySelectorAll(".choices button").forEach(b=>b.onclick=()=>{
+    predictions[b.dataset.i]=b.dataset.v;
+    localStorage.setItem("qm_predictions",JSON.stringify(predictions));
+    render();
+  });
+}
+async function refresh(){
+  try{
+    const r=await fetch("/api/matches",{cache:"no-store"}), d=await r.json();
+    matches=d.matches||[]; document.getElementById("round").textContent=d.jornada||5; render();
+  }catch(e){}
+}
+async function results(){
+  const r=await fetch("/api/check",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({predictions})});
+  const d=await r.json();
+  document.getElementById("summary").classList.remove("hidden");
+  document.getElementById("prize").textContent=eur(d.prize);
+  document.getElementById("hits").textContent=d.hits;
+  document.getElementById("pending").textContent=d.results.filter(x=>x.actual===null).length;
+  document.getElementById("errors").textContent=d.results.filter(x=>x.actual!==null&&!x.hit).length;
+  render();
+  document.getElementById("summary").scrollIntoView({behavior:"smooth",block:"center"});
+}
+document.getElementById("save").onclick=()=>{
+  localStorage.setItem("qm_predictions",JSON.stringify(predictions));
+  document.getElementById("save").textContent="✓  Apuesta guardada";
+  setTimeout(()=>document.getElementById("save").textContent="💾  Guardar mi apuesta",1600);
+};
+document.getElementById("view").onclick=()=>document.getElementById("matches").scrollIntoView({behavior:"smooth"});
+["tabResults","bottomResults"].forEach(id=>document.getElementById(id).onclick=results);
+["tabBet","bottomBet"].forEach(id=>document.getElementById(id).onclick=()=>document.getElementById("matches").scrollIntoView({behavior:"smooth"}));
+refresh(); setInterval(refresh,60000);
+</script>
+</body>
+</html>
