@@ -1,42 +1,40 @@
-QUINIELA MEDIAMARKERA — DEFINITIVA V4
+QUINIELA MEDIAMARKERA — VERSIÓN FINAL
 
-FUNCIONES INCLUIDAS
-- Sin API de pago ni dependencia de SofaScore.
-- Calendario y partidos guardados en la propia base de datos.
-- Cierre AUTOMÁTICO de apuestas: la jornada se cierra al comenzar el PRIMER partido de esa jornada.
-- Además, cada partido deja de poder editarse cuando comienza.
-- El administrador puede introducir las fechas/horas de los partidos desde Administración.
-- Resultados y marcadores se introducen desde Administración y los aciertos se recalculan automáticamente.
-- Login con desplegable de usuarios: no hace falta escribir el nombre.
-- Mi apuesta muestra siempre su resumen: aciertos, pendientes, fallos y premio.
-- Resumen muestra todas las apuestas de todos los participantes de la jornada.
-- Clasificación acumulada de todas las jornadas.
-- Administración completa: jornadas, partidos, resultados, usuarios, contraseñas y gestión/edición/borrado de apuestas.
-- PostgreSQL de Railway compatible (incluye corrección de filas como diccionarios).
-- SQLite local compatible.
-- Diseño responsive para móvil, sin el zoom/ampliación anterior.
+ARCHIVOS QUE DEBES SUBIR A GITHUB
+- app.py
+- requirements.txt
+- Procfile
 
-USUARIOS INICIALES
-Se crean en una base de datos nueva los usuarios configurados en app.py.
-Contraseña inicial: biwenger2026
-RFMF es administrador.
+NO BORRES
+- El repositorio de GitHub.
+- DATABASE_URL de Railway.
+- La base de datos PostgreSQL de Railway.
+- Variables de entorno que ya tengas.
 
-IMPORTANTE CON UNA BASE DE DATOS EXISTENTE
-La aplicación conserva usuarios y apuestas existentes y realiza las migraciones necesarias.
-Si RFMF ya existe, conserva su contraseña actual; el administrador puede restablecer las contraseñas desde Administración.
+VARIABLES DE ENTORNO
+- DATABASE_URL: la proporciona Railway si tienes PostgreSQL conectado.
+- SECRET_KEY: recomendable mantener una clave propia.
+- ADMIN_USERNAME: opcional. Por defecto: RFMF
+- INITIAL_PASSWORD: opcional. Por defecto: biwenger2026
+- FORCE_ADMIN_RESET: opcional. Por defecto true para recuperar el acceso inicial del administrador.
 
-RAILWAY
-1. Sustituye los archivos del repositorio por los de este ZIP.
-2. NO es necesario borrar el repositorio ni crear otro.
-3. Procfile: web: gunicorn app:app
-4. requirements.txt instala Flask, Gunicorn y psycopg.
-5. En Railway usa PostgreSQL mediante DATABASE_URL y define SECRET_KEY.
-6. Haz un nuevo Deploy/Deploy Latest Commit.
-7. Si Railway muestra un error, abrir Deployments > View Logs.
+ACCESO INICIAL
+Usuario: RFMF
+Contraseña: biwenger2026
 
-CIERRE AUTOMÁTICO
-Para que el cierre sea automático, el administrador debe poner la fecha y hora de cada partido.
-El cierre se calcula solo usando el partido más temprano de la jornada. No hay que pulsar ningún botón para cerrar.
+IMPORTANTE SOBRE FORCE_ADMIN_RESET
+Después de entrar como administrador y cambiar la contraseña de RFMF, cambia FORCE_ADMIN_RESET a false o elimínala.
 
-GESTIÓN DE APUESTAS
-Administración > Apuestas permite seleccionar una jornada y modificar o borrar el pronóstico de cualquier usuario, incluso después del cierre normal. Esto permite corregir incidencias como administrador.
+QUÉ INCLUYE
+- Calendario LaLiga 2026/27 sin API de pago.
+- Marcador público con actualización automática.
+- Resumen de Mi apuesta.
+- Resumen de todas las apuestas.
+- Clasificación.
+- Administración de usuarios.
+- Restablecimiento de contraseñas.
+- Creación y eliminación de usuarios.
+- Edición y eliminación de apuestas por el administrador.
+- Apertura/cierre de jornadas.
+- Sincronización manual de calendario y resultados.
+- Endpoint /health para comprobar Railway.
