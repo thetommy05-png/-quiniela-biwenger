@@ -1,40 +1,22 @@
-QUINIELA MEDIAMARKERA — VERSIÓN FINAL
+QUINIELA MEDIAMARKERA – V6
 
-ARCHIVOS QUE DEBES SUBIR A GITHUB
-- app.py
-- requirements.txt
-- Procfile
+Esta versión sincroniza automáticamente el calendario y resultados de LaLiga mediante el feed público sin clave de ESPN. No requiere API de pago ni variable de API.
 
-NO BORRES
-- El repositorio de GitHub.
-- DATABASE_URL de Railway.
-- La base de datos PostgreSQL de Railway.
-- Variables de entorno que ya tengas.
+FUNCIONAMIENTO
+- Al arrancar y periódicamente, la aplicación consulta el calendario completo de LaLiga 2026/27.
+- Las jornadas y horarios se crean/actualizan automáticamente.
+- Los resultados y marcadores se actualizan automáticamente.
+- El cierre de una jornada se produce automáticamente al comenzar el primer partido de esa jornada.
+- Una vez iniciado el primer partido, NINGÚN jugador puede modificar ningún pronóstico de esa jornada.
+- El servidor impone el bloqueo; no depende solo de la interfaz.
+- El administrador mantiene acceso a gestión de usuarios, contraseñas, apuestas y resultados.
 
-VARIABLES DE ENTORNO
-- DATABASE_URL: la proporciona Railway si tienes PostgreSQL conectado.
-- SECRET_KEY: recomendable mantener una clave propia.
-- ADMIN_USERNAME: opcional. Por defecto: RFMF
-- INITIAL_PASSWORD: opcional. Por defecto: biwenger2026
-- FORCE_ADMIN_RESET: opcional. Por defecto true para recuperar el acceso inicial del administrador.
+RAILWAY
+1. Sustituye los archivos del proyecto por los del ZIP.
+2. No borres PostgreSQL ni sus datos.
+3. No necesitas ninguna API_KEY.
+4. Railway debe tener DATABASE_URL y SECRET_KEY como variables.
+5. El comando de arranque es el del Procfile.
 
-ACCESO INICIAL
-Usuario: RFMF
-Contraseña: biwenger2026
-
-IMPORTANTE SOBRE FORCE_ADMIN_RESET
-Después de entrar como administrador y cambiar la contraseña de RFMF, cambia FORCE_ADMIN_RESET a false o elimínala.
-
-QUÉ INCLUYE
-- Calendario LaLiga 2026/27 sin API de pago.
-- Marcador público con actualización automática.
-- Resumen de Mi apuesta.
-- Resumen de todas las apuestas.
-- Clasificación.
-- Administración de usuarios.
-- Restablecimiento de contraseñas.
-- Creación y eliminación de usuarios.
-- Edición y eliminación de apuestas por el administrador.
-- Apertura/cierre de jornadas.
-- Sincronización manual de calendario y resultados.
-- Endpoint /health para comprobar Railway.
+NOTA
+El feed de ESPN es público y sin clave, pero es un endpoint no documentado oficialmente por ESPN. La aplicación tiene tolerancia a fallos: si el proveedor no responde, la web sigue usando los datos guardados y reintenta automáticamente.
