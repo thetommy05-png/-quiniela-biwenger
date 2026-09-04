@@ -50,26 +50,68 @@ def outcome(home, away):
 
 
 def fixture_matches(round_no):
-    """Obtiene los partidos y marcadores de LaLiga desde SofaScore."""
-    try:
-        r = requests.get(
-            f"{SOFASCORE_URL}/unique-tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events/round/{round_no}",
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-            timeout=15,
-        )
-        r.raise_for_status()
-        payload = r.json()
-        out = []
+    """Obtiene los partidos de una jornada de LaLiga desde SofaScore.
 
-        for event in payload.get("events", []):
+    No usamos el endpoint /events/round porque en algunas competiciones/temporadas
+    SofaScore puede devolver una jornada vacía aunque existan los partidos.
+    Usamos las páginas de partidos anteriores y siguientes y filtramos por roundInfo.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.sofascore.com/",
+    }
+
+    def fetch_direction(direction):
+        found = []
+        # Para la jornada actual suelen bastar 1-2 páginas; permitimos más para
+        # que también funcionen jornadas lejanas durante toda la temporada.
+        for page in range(0, 20):
+            url = f"https://api.sofascore.com/api/v1/unique-tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events/{direction}/{page}"
+            r = requests.get(url, headers=headers, timeout=15)
+            r.raise_for_status()
+            payload = r.json()
+            events = payload.get("events") or []
+            found.extend(events)
+            if not payload.get("hasNextPage") or not events:
+                break
+        return found
+
+    try:
+        events = []
+        seen = set()
+        # Mezclamos partidos ya jugados y próximos para cubrir cualquier jornada.
+        for direction in ("last", "next"):
+            for event in fetch_direction(direction):
+                eid = str(event.get("id"))
+                if eid and eid not in seen:
+                    seen.add(eid)
+                    events.append(event)
+
+        # SofaScore normalmente guarda la jornada en roundInfo.round.
+        # Algunas respuestas antiguas pueden usar round.number.
+        round_events = []
+        for event in events:
+            ri = event.get("roundInfo") or {}
+            rn = ri.get("round")
+            if rn is None:
+                rn = (event.get("round") or {}).get("round")
+            try:
+                if int(rn) == int(round_no):
+                    round_events.append(event)
+            except (TypeError, ValueError):
+                pass
+
+        out = []
+        for event in round_events:
             home = event.get("homeTeam") or {}
             away = event.get("awayTeam") or {}
             status = event.get("status") or {}
             hs = event.get("homeScore") or {}
             aws = event.get("awayScore") or {}
 
-            status_type = status.get("type", "")
-            finished = status_type == "finished"
+            status_type = status.get("type", "notstarted")
+            finished = status_type == "finished" or status.get("code") in {100}
             live = status_type in {"inprogress", "in_progress"}
 
             if finished:
@@ -83,30 +125,27 @@ def fixture_matches(round_no):
             else:
                 label = "Próximo"
 
-            time_obj = event.get("time") or {}
-            elapsed = time_obj.get("current") or time_obj.get("played")
+            # Para fútbol, current es el marcador actual incluso durante el directo.
+            hg = hs.get("current")
+            ag = aws.get("current")
+            elapsed = (event.get("time") or {}).get("current")
+            if elapsed is None:
+                elapsed = (event.get("time") or {}).get("played")
+            if elapsed is None:
+                elapsed = (event.get("status") or {}).get("elapsed")
 
             ts = event.get("startTimestamp")
-            date_iso = (
-                datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-                if ts else None
-            )
+            date_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
 
             out.append({
                 "id": str(event.get("id")),
                 "home": home.get("name", ""),
                 "away": away.get("name", ""),
-                "home_logo": (
-                    f"https://api.sofascore.com/api/v1/team/{home.get('id')}/image"
-                    if home.get("id") else None
-                ),
-                "away_logo": (
-                    f"https://api.sofascore.com/api/v1/team/{away.get('id')}/image"
-                    if away.get("id") else None
-                ),
+                "home_logo": f"https://api.sofascore.com/api/v1/team/{home.get('id')}/image" if home.get("id") else None,
+                "away_logo": f"https://api.sofascore.com/api/v1/team/{away.get('id')}/image" if away.get("id") else None,
                 "date": date_iso,
-                "home_goals": hs.get("current"),
-                "away_goals": aws.get("current"),
+                "home_goals": hg,
+                "away_goals": ag,
                 "status": status_type,
                 "status_label": label,
                 "elapsed": elapsed,
@@ -118,9 +157,8 @@ def fixture_matches(round_no):
         return out, None
 
     except Exception as e:
-        app.logger.warning("SofaScore: %s", e)
-        return [], f"No se pudieron obtener los resultados: {e}"
-
+        app.logger.exception("SofaScore: %s", e)
+        return [], f"No se pudieron obtener los partidos de SofaScore: {e}"
 
 def get_matches(round_no):
     return fixture_matches(round_no)
