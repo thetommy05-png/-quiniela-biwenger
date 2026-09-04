@@ -1,145 +1,29 @@
 <!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Quiniela Mediamarkera</title>
-<link rel="stylesheet" href="/style.css">
-</head>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Quiniela Mediamarkera</title><link rel="stylesheet" href="/style.css"></head>
 <body>
-<header class="top">
-  <div class="brand">
-    <img src="/rfmf_logo.svg" alt="RFMF">
-    <div><span>QUINIELA</span> <b>MEDIAMARKERA</b></div>
-  </div>
-  <div class="account">RFM <span>⌄</span></div>
-</header>
-
+<header class="top"><div class="brand"><img src="/rfmf_logo.svg" alt="RFMF"><div><span>QUINIELA</span> <b>MEDIAMARKERA</b></div></div><div class="account" id="account">RFM <span>⌄</span></div></header>
 <main>
-  <section class="hero">
-    <div class="round-nav">
-      <button id="prev">‹</button>
-      <div><h1>JORNADA <strong id="round">5</strong></h1><p>LaLiga 2026/2027</p></div>
-      <button id="next">›</button>
-    </div>
-    <div class="open"><i></i> ABIERTA</div>
-  </section>
-
-  <section class="prize">
-    <div><small>PREMIO POR ACIERTO</small><strong>100.000 €</strong></div>
-    <div class="live" id="liveText">● RESULTADOS EN TIEMPO REAL</div>
-  </section>
-
-  <div class="quick">
-    <button id="betTab">📝 <span>Mi apuesta</span></button>
-    <button id="resultTab">📊 <span>Resultados</span></button>
-  </div>
-
-  <section id="summary" class="summary hidden">
-    <div class="sum-head"><span>🏆 PREMIO ACUMULADO</span><strong id="prize">0 €</strong></div>
-    <div class="stats">
-      <div><b id="hits">0</b><small>ACIERTOS</small></div>
-      <div><b id="pending">0</b><small>PENDIENTES</small></div>
-      <div><b id="errors">0</b><small>FALLOS</small></div>
-    </div>
-  </section>
-
-  <section id="matches" class="matches"></section>
-
-  <button id="save" class="save">💾 &nbsp; GUARDAR MI APUESTA</button>
+<section class="hero"><div class="round-nav"><button id="prev">‹</button><div><h1>JORNADA <strong id="round">5</strong></h1><p>LaLiga 2026/2027</p></div><button id="next">›</button></div><div class="open"><i></i> ABIERTA</div></section>
+<section class="prize"><div><small>PREMIO POR ACIERTO</small><strong>100.000 €</strong></div><div class="live" id="liveText">● RESULTADOS EN TIEMPO REAL</div></section>
+<div class="quick"><button id="betTab">📝 <span>Mi apuesta</span></button><button id="resultTab">📊 <span>Resultados</span></button><button id="adminTab" class="hidden">⚙️ <span>Administración</span></button></div>
+<section id="summary" class="summary hidden"><div class="sum-head"><span>🏆 PREMIO ACUMULADO</span><strong id="prize">0 €</strong></div><div class="stats"><div><b id="hits">0</b><small>ACIERTOS</small></div><div><b id="pending">0</b><small>PENDIENTES</small></div><div><b id="errors">0</b><small>FALLOS</small></div></div></section>
+<section id="matches" class="matches"></section>
+<button id="save" class="save">💾 &nbsp; GUARDAR MI APUESTA</button>
+<section id="admin" class="hidden" style="margin-top:20px"><div class="summary"><div class="sum-head"><span>⚙️ ADMINISTRACIÓN</span></div><div id="adminContent" style="padding:15px"></div></div></section>
 </main>
-
-<footer>
-  <button class="active">⚽<small>Jornada</small></button>
-  <button id="bottomBet">📝<small>Mi apuesta</small></button>
-  <button id="bottomResults">📊<small>Resultados</small></button>
-  <button onclick="location.href='/logout'">↪<small>Salir</small></button>
-</footer>
-
+<footer><button class="active" id="bottomRound">⚽<small>Jornada</small></button><button id="bottomBet">📝<small>Mi apuesta</small></button><button id="bottomResults">📊<small>Resultados</small></button><button onclick="location.href='/logout'">↪<small>Salir</small></button></footer>
 <script>
-let round=5, matches=[];
-let apiError=null;
-const state={};
-const eur=n=>new Intl.NumberFormat("es-ES").format(n)+" €";
-const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-function getPred(id){return state[id]?.pick||null}
-function setPred(id,p){state[id]={...(state[id]||{}),pick:p}}
-function outcome(m){return m.actual||null}
-function render(){
- const root=document.getElementById("matches"); root.innerHTML="";
- matches.forEach((m,i)=>{
-  const p=getPred(m.id), actual=outcome(m);
-  let label="PENDIENTE", cls="pending";
-  if(m.live){ label=(m.status_label||"EN JUEGO")+(m.elapsed?" · "+m.elapsed+"'":""); cls="liveStatus"; }
-  else if(actual){ if(p===actual){label="✓ ACIERTO · +100.000 €";cls="hit"} else if(p){label="✕ FALLADO";cls="miss"} else {label="RESULTADO";cls="result"}}
-  else if(m.status==="PST"){label="APLAZADO";cls="pending"}
-  else if(m.status==="CANC"){label="CANCELADO";cls="miss"}
-  const article=document.createElement("article"); article.className="match";
-  article.innerHTML=`
-   <div class="number">${i+1}</div>
-   <div class="teams"><div>${esc(m.home)}</div><div>${esc(m.away)}</div></div>
-   <div class="choices">${["1","X","2"].map(v=>`<button class="${p===v?"selected":""}" data-id="${esc(m.id)}" data-pick="${v}">${v}</button>`).join("")}
-   <div class="status ${cls}">${actual?esc(m.score)+" · ":""}${label}</div></div>`;
-  root.appendChild(article);
- });
- root.querySelectorAll(".choices button").forEach(b=>b.onclick=()=>{
-  setPred(b.dataset.id,b.dataset.pick); render();
- });
-}
-async function load(){
- const r=await fetch("/api/matches?round="+round,{cache:"no-store"});
- if(!r.ok){location.href="/login";return}
- const d=await r.json(); apiError=d.api_error||null; matches=d.matches||[];
- document.getElementById("liveText").textContent=apiError?"● CALENDARIO CARGADO · DIRECTO AL INICIARSE":"● RESULTADOS EN TIEMPO REAL";
- document.getElementById("round").textContent=d.jornada;
- matches.forEach(m=>{if(!state[m.id])state[m.id]={pick:m.pick||null};});
- render();
-}
-async function save(){
- const predictions={}; matches.forEach(m=>{const p=getPred(m.id);if(p)predictions[m.id]=p});
- const r=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({round,predictions})});
- const b=document.getElementById("save");
- b.textContent=r.ok?"✓ APUESTA GUARDADA":"ERROR AL GUARDAR";
- setTimeout(()=>b.textContent="💾   GUARDAR MI APUESTA",1500);
-}
-async function results(){
- const r=await fetch("/api/check?round="+round,{cache:"no-store"}), d=await r.json();
- document.getElementById("summary").classList.remove("hidden");
- document.getElementById("prize").textContent=eur(d.prize);
- document.getElementById("hits").textContent=d.hits;
- document.getElementById("pending").textContent=d.pending;
- document.getElementById("errors").textContent=d.errors;
- matches.forEach(m=>{const x=d.results.find(v=>v.id===m.id);if(x){m.actual=x.actual;m.score=x.score}});
- render();
- document.getElementById("summary").scrollIntoView({behavior:"smooth",block:"center"});
- if(d.api_error) alert(d.api_error);
-}
-document.getElementById("save").onclick=save;
-document.getElementById("resultTab").onclick=results;
-document.getElementById("bottomResults").onclick=results;
-document.getElementById("betTab").onclick=()=>document.getElementById("matches").scrollIntoView({behavior:"smooth"});
-document.getElementById("bottomBet").onclick=()=>document.getElementById("matches").scrollIntoView({behavior:"smooth"});
-document.getElementById("prev").onclick=()=>{if(round>5){round--;document.getElementById("summary").classList.add("hidden");load()}};
-document.getElementById("next").onclick=()=>{if(round<38){round++;document.getElementById("summary").classList.add("hidden");load()}};
-load(); setInterval(load,60000);
-</script>
-
-<script>
-/* Actualización de resultados en directo cada 15 segundos. */
-setInterval(async () => {
-  try {
-    if (typeof loadMatches === "function") {
-      await loadMatches();
-    } else if (typeof load === "function") {
-      await load();
-    } else if (typeof fetchMatches === "function") {
-      await fetchMatches();
-    }
-  } catch (e) {
-    console.warn("Actualización en directo:", e);
-  }
-}, 15000);
-</script>
-
-</body>
-</html>
+let round=5,matches=[];const state={};const eur=n=>new Intl.NumberFormat("es-ES").format(n)+" €";const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));function getPred(id){return state[id]?.pick||null}function setPred(id,p){state[id]={...(state[id]||{}),pick:p}}
+function render(){const root=document.getElementById("matches");root.innerHTML="";matches.forEach((m,i)=>{const p=getPred(m.id),a=m.actual;let label="PENDIENTE",cls="pending";if(m.live){label=(m.status_label||"EN JUEGO")+(m.elapsed?" · "+m.elapsed+"'":"");cls="liveStatus"}else if(a){if(p===a){label="✓ ACIERTO · +100.000 €";cls="hit"}else if(p){label="✕ FALLADO";cls="miss"}else{label="RESULTADO";cls="result"}}else if(m.status==="PST"){label="APLAZADO"}else if(m.status==="CANC"){label="CANCELADO";cls="miss"}const article=document.createElement("article");article.className="match";article.innerHTML=`<div class="number">${i+1}</div><div class="teams"><div>${esc(m.home)}</div><div>${esc(m.away)}</div></div><div class="choices">${["1","X","2"].map(v=>`<button class="${p===v?"selected":""}" data-id="${esc(m.id)}" data-pick="${v}">${v}</button>`).join("")}<div class="status ${cls}">${m.score?esc(m.score)+" · ":""}${label}</div></div>`;root.appendChild(article)});root.querySelectorAll(".choices button").forEach(b=>b.onclick=()=>{setPred(b.dataset.id,b.dataset.pick);render()})}
+async function load(){const r=await fetch("/api/matches?round="+round,{cache:"no-store"});if(!r.ok){location.href="/login";return}const d=await r.json();matches=d.matches||[];document.getElementById("liveText").textContent=d.api_error?"● CALENDARIO CARGADO · DIRECTO AL INICIARSE":"● RESULTADOS EN TIEMPO REAL";document.getElementById("round").textContent=d.jornada;matches.forEach(m=>{if(!state[m.id])state[m.id]={pick:m.pick||null};else if(m.pick)state[m.id].pick=m.pick});render()}
+async function save(){const predictions={};matches.forEach(m=>{const p=getPred(m.id);if(p)predictions[m.id]=p});const r=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({round,predictions})});const b=document.getElementById("save");b.textContent=r.ok?"✓ APUESTA GUARDADA":"ERROR AL GUARDAR";setTimeout(()=>b.textContent="💾   GUARDAR MI APUESTA",1500)}
+async function results(){const r=await fetch("/api/check?round="+round,{cache:"no-store"}),d=await r.json();document.getElementById("summary").classList.remove("hidden");document.getElementById("prize").textContent=eur(d.prize);document.getElementById("hits").textContent=d.hits;document.getElementById("pending").textContent=d.pending;document.getElementById("errors").textContent=d.errors;d.results.forEach(x=>{const m=matches.find(v=>v.id===x.id);if(m){m.actual=x.actual;m.score=x.score;m.live=x.live;m.status_label=x.status_label;m.elapsed=x.elapsed}});render();document.getElementById("summary").scrollIntoView({behavior:"smooth",block:"center"})}
+async function mySummary(){const r=await fetch("/api/summary"),d=await r.json();document.getElementById("summary").classList.remove("hidden");document.getElementById("prize").textContent=eur(d.prize);document.getElementById("hits").textContent=d.hits;document.getElementById("pending").textContent=d.pending;document.getElementById("errors").textContent=d.rounds.reduce((a,x)=>a+x.errors,0);document.getElementById("summary").scrollIntoView({behavior:"smooth",block:"center"})}
+async function init(){const d=await (await fetch("/api/me")).json();document.getElementById("account").innerHTML=esc(d.username)+" <span>⌄</span>";if(d.is_admin)document.getElementById("adminTab").classList.remove("hidden");load()}
+async function adminPanel(){document.getElementById("admin").classList.remove("hidden");document.getElementById("matches").classList.add("hidden");document.getElementById("save").classList.add("hidden");const d=await (await fetch("/api/admin/overview")).json();let h="<h3>Usuarios y premios</h3><table style='width:100%'><tr><th>Usuario</th><th>Aciertos</th><th>Premio</th></tr>";d.users.forEach(u=>h+=`<tr><td>${esc(u.username)}</td><td>${u.hits}</td><td>${eur(u.prize)}</td></tr>`);h+="</table><hr><h3>Gestión de usuarios</h3><p><input id='nu' placeholder='Usuario'><input id='np' placeholder='Contraseña'></p><button onclick='createUser()'>CREAR USUARIO</button><div id='users'></div>';document.getElementById("adminContent").innerHTML=h;loadUsers()}
+async function loadUsers(){const d=await (await fetch("/api/admin/users")).json();document.getElementById("users").innerHTML=d.users.map(u=>`<p><b>${esc(u.username)}</b> ${u.is_admin?"(ADMIN)":""} — ${u.active?"Activo":"Inactivo"} ${!u.is_admin?`<button onclick="resetPw('${esc(u.username)}')">Cambiar contraseña</button> <button onclick="deleteUser('${esc(u.username)}')">Eliminar</button>`:""}</p>`).join("")}
+async function createUser(){const u=document.getElementById("nu").value,p=document.getElementById("np").value;const r=await fetch("/api/admin/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});if(!r.ok)alert((await r.json()).error);loadUsers()}
+async function resetPw(u){const p=prompt("Nueva contraseña para "+u);if(!p)return;await fetch("/api/admin/users/"+encodeURIComponent(u),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:p})});alert("Contraseña cambiada")}
+async function deleteUser(u){if(!confirm("¿Eliminar "+u+" y sus apuestas?"))return;await fetch("/api/admin/users/"+encodeURIComponent(u),{method:"DELETE"});loadUsers()}
+document.getElementById("save").onclick=save;document.getElementById("resultTab").onclick=results;document.getElementById("bottomResults").onclick=results;document.getElementById("betTab").onclick=mySummary;document.getElementById("bottomBet").onclick=mySummary;document.getElementById("adminTab").onclick=adminPanel;document.getElementById("prev").onclick=()=>{if(round>5){round--;document.getElementById("summary").classList.add("hidden");load()}};document.getElementById("next").onclick=()=>{if(round<38){round++;document.getElementById("summary").classList.add("hidden");load()}};init();setInterval(load,30000);
+</script></body></html>
