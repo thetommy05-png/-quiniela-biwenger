@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import unicodedata
 from datetime import datetime, timezone
 from functools import wraps
 
@@ -11,13 +12,14 @@ app = Flask(__name__, static_folder=None)
 app.secret_key = os.getenv("SECRET_KEY", "cambia-esta-clave-en-produccion")
 
 DB = os.getenv("DATABASE_PATH", "quiniela.db")
-# Resultados en directo mediante SofaScore (sin API key)
-SOFASCORE_URL = "https://www.sofascore.com/api/v1"
-TOURNAMENT_ID = 8       # LaLiga
-SEASON_ID = 97268       # 2026/27
 START_ROUND = 5
 PRIZE_PER_HIT = 100_000
+TOURNAMENT_ID = 8
+SEASON_ID = 97268  # LaLiga 2026/27 en SofaScore
 
+# No se necesita ninguna API key ni pago.
+SOFASCORE_URL = "https://api.sofascore.com/api/v1"
+ESPN_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard"
 
 LOGIN_HTML = """<!doctype html><html lang=\"es\"><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <title>Quiniela Mediamarkera</title><style>
@@ -50,154 +52,291 @@ def outcome(home, away):
     return "1" if home > away else ("2" if home < away else "X")
 
 
+def clean_name(value):
+    value = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
-def fixture_matches(round_no):
-    """Obtiene una jornada de LaLiga desde la API pública de SofaScore.
 
-    La API de SofaScore tiene un endpoint específico por jornada. Usamos ese
-    endpoint directamente en lugar de intentar reconstruir la jornada con
-    páginas de partidos anteriores/siguientes, que puede devolver una lista
-    vacía para jornadas futuras.
+def stable_id(home, away):
+    return f"{clean_name(home)}__{clean_name(away)}"
 
-    Si SofaScore estuviera temporalmente inaccesible, para la jornada 5 usamos
-    el calendario oficial conocido como respaldo para que la quiniela siga
-    permitiendo apostar. En cuanto la API vuelva, los resultados y marcadores
-    se sincronizan automáticamente.
-    """
-    API_BASES = [
-        "https://api.sofascore.com/api/v1",
-        "https://www.sofascore.com/api/v1",
+
+# Calendario oficial conocido de la Jornada 5. Se usa como base para que la
+# quiniela funcione aunque un proveedor externo esté temporalmente bloqueado.
+ROUND_CALENDAR = {
+    5: [
+        ("Sevilla", "Valencia", "2026-09-11T21:00:00+02:00"),
+        ("Racing de Santander", "Alavés", "2026-09-12T14:00:00+02:00"),
+        ("Osasuna", "Espanyol", "2026-09-12T16:15:00+02:00"),
+        ("Athletic Club", "Elche", "2026-09-12T18:30:00+02:00"),
+        ("Real Madrid", "Rayo Vallecano", "2026-09-12T21:00:00+02:00"),
+        ("Celta de Vigo", "Málaga", "2026-09-13T14:00:00+02:00"),
+        ("Levante", "Barcelona", "2026-09-13T16:15:00+02:00"),
+        ("Getafe", "Deportivo de La Coruña", "2026-09-13T18:30:00+02:00"),
+        ("Real Sociedad", "Atlético de Madrid", "2026-09-13T21:00:00+02:00"),
+        ("Villarreal", "Real Betis", "2026-09-14T21:00:00+02:00"),
     ]
+}
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) "
-                      "AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
-        "Accept": "application/json",
-        "Referer": "https://www.sofascore.com/",
+
+def calendar_fallback(round_no):
+    return [{
+        "id": stable_id(home, away),
+        "event_id": None,
+        "home": home,
+        "away": away,
+        "home_logo": None,
+        "away_logo": None,
+        "date": date_iso,
+        "home_goals": None,
+        "away_goals": None,
+        "status": "notstarted",
+        "status_label": "Próximo",
+        "elapsed": None,
+        "finished": False,
+        "live": False,
+    } for home, away, date_iso in ROUND_CALENDAR.get(round_no, [])]
+
+
+def convert_sofascore_event(event):
+    home = event.get("homeTeam") or {}
+    away = event.get("awayTeam") or {}
+    status = event.get("status") or {}
+    hs = event.get("homeScore") or {}
+    aws = event.get("awayScore") or {}
+
+    status_type = status.get("type") or "notstarted"
+    finished = status_type == "finished" or status.get("code") == 100
+    live = status_type in {"inprogress", "in_progress"}
+
+    hg = hs.get("current")
+    ag = aws.get("current")
+    ts = event.get("startTimestamp")
+    date_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+
+    elapsed = (event.get("time") or {}).get("current")
+    if elapsed is None:
+        elapsed = (event.get("time") or {}).get("played")
+    if elapsed is None:
+        elapsed = status.get("elapsed")
+
+    labels = {
+        "notstarted": "Próximo",
+        "inprogress": "EN DIRECTO",
+        "finished": "Finalizado",
+        "postponed": "Aplazado",
+        "canceled": "Cancelado",
+        "cancelled": "Cancelado",
     }
 
-    def stable_id(home, away):
-        import unicodedata
-        def clean(s):
-            s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
-            return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
-        return f"{clean(home)}__{clean(away)}"
+    home_name = home.get("name", "")
+    away_name = away.get("name", "")
 
-    def convert_event(event):
-        home = event.get("homeTeam") or {}
-        away = event.get("awayTeam") or {}
-        status = event.get("status") or {}
-        hs = event.get("homeScore") or {}
-        aws = event.get("awayScore") or {}
+    return {
+        "id": stable_id(home_name, away_name),
+        "event_id": str(event.get("id")) if event.get("id") is not None else None,
+        "home": home_name,
+        "away": away_name,
+        "home_logo": None,
+        "away_logo": None,
+        "date": date_iso,
+        "home_goals": hg,
+        "away_goals": ag,
+        "status": status_type,
+        "status_label": labels.get(status_type, status_type),
+        "elapsed": elapsed,
+        "finished": finished,
+        "live": live,
+    }
 
-        status_type = status.get("type") or "notstarted"
-        status_code = status.get("code")
-        finished = status_type == "finished" or status_code in {100}
-        live = status_type in {"inprogress", "in_progress"}
 
-        labels = {
-            "notstarted": "Próximo",
-            "inprogress": "EN DIRECTO",
-            "finished": "Finalizado",
-            "postponed": "Aplazado",
-            "canceled": "Cancelado",
-            "cancelled": "Cancelado",
-        }
-        label = labels.get(status_type, status_type)
+def fetch_sofascore(round_no):
+    """Intenta SofaScore. Si Railway recibe 403, no rompe la aplicación."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.sofascore.com/",
+        "Origin": "https://www.sofascore.com",
+    }
+    url = f"{SOFASCORE_URL}/unique-tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events/round/{round_no}"
+    try:
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code != 200:
+            return [], f"HTTP {r.status_code}"
+        payload = r.json()
+        events = payload.get("events") or []
+        return [convert_sofascore_event(e) for e in events], None
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
 
-        hg = hs.get("current")
-        ag = aws.get("current")
 
-        # SofaScore puede guardar el minuto en distintos campos según el partido.
-        elapsed = (event.get("time") or {}).get("current")
-        if elapsed is None:
-            elapsed = (event.get("time") or {}).get("played")
-        if elapsed is None:
-            elapsed = status.get("elapsed")
+def espn_status(event):
+    competitions = event.get("competitions") or []
+    comp = competitions[0] if competitions else {}
+    status = comp.get("status") or event.get("status") or {}
+    typ = status.get("type") or {}
+    state = typ.get("state") or "pre"
+    detail = status.get("type", {}).get("detail") or status.get("detail") or ""
 
-        ts = event.get("startTimestamp")
-        date_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else None
+    if state == "post":
+        return "finished", "Finalizado", False, True, detail
+    if state == "in":
+        # ESPN detail suele contener el minuto: "45'", "2nd Half", etc.
+        elapsed = None
+        text = str(detail)
+        m = re.search(r"(\d{1,3})\s*['’]", text)
+        if m:
+            elapsed = int(m.group(1))
+        return "inprogress", "EN DIRECTO", True, False, elapsed
+    return "notstarted", "Próximo", False, False, None
 
-        home_name = home.get("name", "")
-        away_name = away.get("name", "")
 
-        return {
-            # ID estable por enfrentamiento: funciona tanto con API como con fallback.
-            "id": stable_id(home_name, away_name),
-            "event_id": str(event.get("id")) if event.get("id") is not None else None,
-            "home": home_name,
-            "away": away_name,
-            "home_logo": f"https://api.sofascore.com/api/v1/team/{home.get('id')}/image"
-                         if home.get("id") else None,
-            "away_logo": f"https://api.sofascore.com/api/v1/team/{away.get('id')}/image"
-                         if away.get("id") else None,
-            "date": date_iso,
-            "home_goals": hg,
-            "away_goals": ag,
-            "status": status_type,
-            "status_label": label,
-            "elapsed": elapsed,
-            "finished": finished,
-            "live": live,
-        }
+def fetch_espn_dates(dates):
+    """Obtiene marcadores/calendario de ESPN sin API key."""
+    found = {}
+    errors = []
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
-    # 1) Fuente principal: endpoint de jornada.
-    last_error = None
-    for base_url in API_BASES:
-        url = f"{base_url}/unique-tournament/{TOURNAMENT_ID}/season/{SEASON_ID}/events/round/{round_no}"
+    for date_value in dates:
         try:
-            r = requests.get(url, headers=headers, timeout=15)
+            r = requests.get(ESPN_URL, params={"dates": date_value}, headers=headers, timeout=8)
             r.raise_for_status()
             payload = r.json()
-            events = payload.get("events") or []
-            if events:
-                out = [convert_event(e) for e in events]
-                out.sort(key=lambda m: m.get("date") or "")
-                return out, None
-            last_error = f"SofaScore devolvió 0 partidos para la jornada {round_no}."
-        except Exception as e:
-            last_error = f"{type(e).__name__}: {e}"
+            for event in payload.get("events") or []:
+                competitions = event.get("competitions") or []
+                if not competitions:
+                    continue
+                comp = competitions[0]
+                competitors = comp.get("competitors") or []
+                if len(competitors) < 2:
+                    continue
 
-    # 2) Respaldo para Jornada 5: calendario oficial publicado.
-    # IDs estables para que las apuestas guardadas no dependan de un event ID externo.
-    fallback_rounds = {
-        5: [
-            ("Sevilla", "Valencia", "2026-09-11T21:00:00+02:00"),
-            ("Racing de Santander", "Alavés", "2026-09-12T14:00:00+02:00"),
-            ("Osasuna", "Espanyol", "2026-09-12T16:15:00+02:00"),
-            ("Athletic Club", "Elche", "2026-09-12T18:30:00+02:00"),
-            ("Real Madrid", "Rayo Vallecano", "2026-09-12T21:00:00+02:00"),
-            ("Celta de Vigo", "Málaga", "2026-09-13T14:00:00+02:00"),
-            ("Levante", "Barcelona", "2026-09-13T16:15:00+02:00"),
-            ("Getafe", "Deportivo de La Coruña", "2026-09-13T18:30:00+02:00"),
-            ("Real Sociedad", "Atlético de Madrid", "2026-09-13T21:00:00+02:00"),
-            ("Villarreal", "Real Betis", "2026-09-14T21:00:00+02:00"),
-        ]
+                home = next((x for x in competitors if x.get("homeAway") == "home"), competitors[0])
+                away = next((x for x in competitors if x.get("homeAway") == "away"), competitors[1])
+                home_team = home.get("team") or {}
+                away_team = away.get("team") or {}
+                home_name = home_team.get("displayName") or home_team.get("shortDisplayName") or ""
+                away_name = away_team.get("displayName") or away_team.get("shortDisplayName") or ""
+
+                state, label, live, finished, elapsed = espn_status(event)
+                hg = home.get("score")
+                ag = away.get("score")
+                try:
+                    hg = int(hg) if hg is not None else None
+                except (TypeError, ValueError):
+                    hg = None
+                try:
+                    ag = int(ag) if ag is not None else None
+                except (TypeError, ValueError):
+                    ag = None
+
+                date_iso = event.get("date")
+                item = {
+                    "id": stable_id(home_name, away_name),
+                    "event_id": str(event.get("id")) if event.get("id") else None,
+                    "home": home_name,
+                    "away": away_name,
+                    "home_logo": home_team.get("logo"),
+                    "away_logo": away_team.get("logo"),
+                    "date": date_iso,
+                    "home_goals": hg,
+                    "away_goals": ag,
+                    "status": state,
+                    "status_label": label,
+                    "elapsed": elapsed,
+                    "finished": finished,
+                    "live": live,
+                }
+                found[stable_id(home_name, away_name)] = item
+        except Exception as e:
+            errors.append(str(e))
+    return found, errors
+
+
+def merge_by_calendar(base, updates):
+    """Mantiene nombres/orden del calendario oficial y aplica datos del proveedor."""
+    aliases = {
+        "sevilla": "sevilla",
+        "sevilla-fc": "sevilla",
+        "valencia": "valencia",
+        "valencia-cf": "valencia",
+        "racing-de-santander": "racing-de-santander",
+        "racing-santander": "racing-de-santander",
+        "alaves": "alaves",
+        "deportivo-alaves": "alaves",
+        "espanyol": "espanyol",
+        "rcd-espanyol-de-barcelona": "espanyol",
+        "celta-de-vigo": "celta-de-vigo",
+        "celta": "celta-de-vigo",
+        "malaga": "malaga",
+        "malaga-cf": "malaga",
+        "levante": "levante",
+        "levante-ud": "levante",
+        "barcelona": "barcelona",
+        "fc-barcelona": "barcelona",
+        "deportivo-de-la-coruna": "deportivo-de-la-coruna",
+        "rc-deportivo": "deportivo-de-la-coruna",
+        "real-sociedad": "real-sociedad",
+        "atletico-de-madrid": "atletico-de-madrid",
+        "real-betis": "real-betis",
+        "villarreal": "villarreal",
+        "real-madrid": "real-madrid",
+        "rayo-vallecano": "rayo-vallecano",
+        "osasuna": "osasuna",
+        "athletic-club": "athletic-club",
+        "elche": "elche",
+        "getafe": "getafe",
     }
 
-    fallback = fallback_rounds.get(int(round_no), [])
-    if fallback:
-        out = []
-        for home, away, date_iso in fallback:
-            out.append({
-                "id": stable_id(home, away),
-                "event_id": None,
-                "home": home,
-                "away": away,
-                "home_logo": None,
-                "away_logo": None,
-                "date": date_iso,
-                "home_goals": None,
-                "away_goals": None,
-                "status": "notstarted",
-                "status_label": "Próximo",
-                "elapsed": None,
-                "finished": False,
-                "live": False,
-            })
-        return out, f"Calendario de respaldo activo. SofaScore: {last_error}"
+    def team_key(name):
+        k = clean_name(name)
+        return aliases.get(k, k)
 
-    return [], f"No se pudieron obtener los partidos de SofaScore: {last_error}"
+    update_by_pair = {}
+    for item in updates.values():
+        pair = (team_key(item["home"]), team_key(item["away"]))
+        update_by_pair[pair] = item
+
+    result = []
+    for m in base:
+        pair = (team_key(m["home"]), team_key(m["away"]))
+        u = update_by_pair.get(pair)
+        if u:
+            merged = dict(m)
+            for key in ("event_id", "home_logo", "away_logo", "date", "home_goals", "away_goals", "status", "status_label", "elapsed", "finished", "live"):
+                if u.get(key) is not None:
+                    merged[key] = u[key]
+            result.append(merged)
+        else:
+            result.append(m)
+    return result
+
+
+def fixture_matches(round_no):
+    # Base: calendario futuro conocido. Esto evita que un 403 de SofaScore
+    # deje la pantalla vacía antes de que empiece la jornada.
+    base = calendar_fallback(round_no)
+
+    # 1) Intentamos SofaScore primero.
+    sofa_events, _sofa_error = fetch_sofascore(round_no)
+    if sofa_events:
+        updates = {m["id"]: m for m in sofa_events}
+        return merge_by_calendar(base or sofa_events, updates), None
+
+    # 2) Fallback gratuito y sin clave: ESPN. Consultamos las fechas de la jornada.
+    dates = sorted({m["date"][:10].replace("-", "") for m in base})
+    if dates:
+        espn_updates, _errors = fetch_espn_dates(dates)
+        if espn_updates:
+            return merge_by_calendar(base, espn_updates), None
+
+    # 3) Si todos los proveedores externos están inaccesibles, mantenemos el
+    # calendario para poder apostar. No mostramos un falso error de resultados.
+    if base:
+        return base, None
+
+    return [], "No se pudo obtener el calendario de la jornada."
+
 
 def get_matches(round_no):
     return fixture_matches(round_no)
@@ -209,6 +348,7 @@ def current_bets(round_no):
         "SELECT match_id,pick FROM bets WHERE username=? AND round=?",
         (session["user"], round_no),
     ).fetchall()
+    c.close()
     return {r["match_id"]: r["pick"] for r in rows}
 
 
@@ -257,7 +397,7 @@ def api_matches():
         actual = outcome(m["home_goals"], m["away_goals"]) if m["finished"] else None
         m["pick"] = bets.get(m["id"])
         m["actual"] = actual
-        m["score"] = f'{m["home_goals"]} - {m["away_goals"]}' if m["finished"] else None
+        m["score"] = f'{m["home_goals"]} - {m["away_goals"]}' if actual else None
         m["correct"] = bool(actual and m["pick"] == actual)
     return jsonify({
         "jornada": rn,
@@ -277,22 +417,16 @@ def api_save():
     predictions = data.get("predictions", {})
     matches, _ = get_matches(rn)
     valid_ids = {m["id"] for m in matches}
-    # Si la fuente está temporalmente caída, no bloqueamos una apuesta ya enviada.
-    # Los IDs enviados por el frontend se consideran válidos para la jornada.
-    if not valid_ids:
-        valid_ids = {str(mid) for mid in predictions.keys()}
-
     c = db()
-    saved = 0
     for mid, pick in predictions.items():
-        if str(mid) in valid_ids and pick in {"1", "X", "2"}:
+        if mid in valid_ids and pick in {"1", "X", "2"}:
             c.execute(
                 "INSERT OR REPLACE INTO bets(username,round,match_id,pick) VALUES(?,?,?,?)",
-                (session["user"], rn, str(mid), pick),
+                (session["user"], rn, mid, pick),
             )
-            saved += 1
     c.commit()
-    return jsonify({"ok": saved > 0, "saved": saved})
+    c.close()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/check")
@@ -337,6 +471,7 @@ def api_summary():
         "SELECT DISTINCT round FROM bets WHERE username=? AND round>=? ORDER BY round",
         (session["user"], START_ROUND),
     ).fetchall()]
+    c.close()
     for rn in saved_rounds:
         matches, _ = get_matches(rn)
         bets = current_bets(rn)
