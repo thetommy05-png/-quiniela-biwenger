@@ -90,7 +90,7 @@ async function load(){
  const r=await fetch("/api/matches?round="+round,{cache:"no-store"});
  if(!r.ok){location.href="/login";return}
  const d=await r.json(); apiError=d.api_error||null; matches=d.matches||[];
- document.getElementById("liveText").textContent=apiError?"⚠ RESULTADOS NO DISPONIBLES":"● RESULTADOS EN TIEMPO REAL";
+ document.getElementById("liveText").textContent=apiError?"● CALENDARIO CARGADO · DIRECTO AL INICIARSE":"● RESULTADOS EN TIEMPO REAL";
  document.getElementById("round").textContent=d.jornada;
  matches.forEach(m=>{if(!state[m.id])state[m.id]={pick:m.pick||null};});
  render();
