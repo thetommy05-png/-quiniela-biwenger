@@ -148,8 +148,6 @@ def sync_rounds():
         r.raise_for_status(); events=parse_events(r.json())
     except Exception as e:
         c.close(); return str(e)
-    # Keep a simple chronological 10-match grouping, which is valid for the
-    # Spanish league regular season and avoids any manual fixture entry.
     events.sort(key=lambda x:x.get("kickoff") or "")
     for idx in range(0,len(events),10):
         group=events[idx:idx+10]
@@ -168,7 +166,6 @@ def sync_rounds():
             if existing:
                 sql(c,"UPDATE matches SET home=?,away=?,kickoff=?,status=?,home_score=?,away_score=? WHERE external_id=?",(e["home"],e["away"],e["kickoff"],e["status"],e["home_score"],e["away_score"],e["id"]))
             else:
-                # Remove placeholder at same slot only if it is still empty/demo.
                 sql(c,"INSERT INTO matches(round_id,match_order,home,away,kickoff,status,home_score,away_score,external_id) VALUES(?,?,?,?,?,?,?,?,?)",(rid,no,e["home"],e["away"],e["kickoff"],e["status"],e["home_score"],e["away_score"],e["id"]))
         sql(c,"UPDATE rounds SET synced_at=?,close_at=? WHERE id=?",(datetime.now(timezone.utc).isoformat(),first_kickoff,rid))
     c.commit(); c.close(); return None
@@ -183,6 +180,23 @@ def auto_close():
             if dt<=now: sql(c,"UPDATE rounds SET open=0 WHERE id=?",(r["id"],))
         except: pass
     c.commit(); c.close()
+
+# NUEVO: devuelve la jornada que está actualmente en juego o, si ya terminó,
+# la siguiente jornada futura. Así nunca se muestra automáticamente la última
+# jornada de la temporada.
+def get_current_round(c):
+    now = datetime.now(timezone.utc).isoformat()
+    r = sql(
+        c,
+        "SELECT * FROM rounds WHERE close_at IS NOT NULL AND close_at > ? ORDER BY number ASC LIMIT 1",
+        (now,)
+    ).fetchone()
+    if r:
+        return r
+    return sql(
+        c,
+        "SELECT * FROM rounds WHERE close_at IS NOT NULL ORDER BY number ASC LIMIT 1",
+    ).fetchone()
 
 @app.route("/login",methods=["GET","POST"])
 def login():
@@ -203,7 +217,7 @@ def logout(): session.clear(); return redirect(url_for("login"))
 @login_required
 def home():
     auto_close(); sync_rounds(); u=current_user(); c=db()
-    r=sql(c,"SELECT * FROM rounds ORDER BY number DESC LIMIT 1").fetchone()
+    r=get_current_round(c)
     if not r: c.close(); return page("<h1>No hay jornadas</h1>",u)
     ms=sql(c,"SELECT * FROM matches WHERE round_id=? ORDER BY match_order",(r["id"],)).fetchall()
     bets={x["match_id"]:x["prediction"] for x in sql(c,"SELECT match_id,prediction FROM bets WHERE user_id=?",(u["id"],)).fetchall()}
@@ -242,18 +256,24 @@ def bet(match_id,prediction):
 @app.route("/mi-apuesta")
 @login_required
 def my_bet():
-    u=current_user(); c=db(); r=sql(c,"SELECT * FROM rounds ORDER BY number DESC LIMIT 1").fetchone(); ms=sql(c,"SELECT * FROM matches WHERE round_id=? ORDER BY match_order",(r["id"],)).fetchall()
+    u=current_user(); c=db(); r=get_current_round(c)
+    if not r:
+        c.close(); return page("<h1>No hay jornadas</h1>",u)
+    ms=sql(c,"SELECT * FROM matches WHERE round_id=? ORDER BY match_order",(r["id"],)).fetchall()
     rows=""
     for m in ms:
         b=sql(c,"SELECT prediction FROM bets WHERE user_id=? AND match_id=?",(u["id"],m["id"])).fetchone()
         rows+=f"<tr><td>{m['match_order']}. {m['home']} - {m['away']}</td><td class=pick>{b['prediction'] if b else '—'}</td></tr>"
     c.close()
-    return page(f"<h1>Mi apuesta</h1><p class=muted>{r['name']} · {u['username']}</p><div class='card scroll'><table><tr><th>Partido</th><th>Pronóstico</th></tr>{rows}</table></div>{'' if not r['open'] else f'<a class=btn href="{url_for("home")}">✏️ Editar apuesta</a>'}",u)
+    return page(f"<h1>Mi apuesta</h1><p class=muted>{r['name']} · {u['username']}</p><div class='card scroll'><table><tr><th>Partido</th><th>Pronóstico</th></tr>{rows}</table></div>{'' if not r['open'] else f'<a class=btn href=\"{url_for("home")}\">✏️ Editar apuesta</a>'}",u)
 
 @app.route("/resumen")
 @login_required
 def summary():
-    u=current_user(); c=db(); r=sql(c,"SELECT * FROM rounds ORDER BY number DESC LIMIT 1").fetchone(); users=sql(c,"SELECT * FROM users ORDER BY id").fetchall(); ms=sql(c,"SELECT * FROM matches WHERE round_id=? ORDER BY match_order",(r["id"],)).fetchall()
+    u=current_user(); c=db(); r=get_current_round(c)
+    if not r:
+        c.close(); return page("<h1>No hay jornadas</h1>",u)
+    users=sql(c,"SELECT * FROM users ORDER BY id").fetchall(); ms=sql(c,"SELECT * FROM matches WHERE round_id=? ORDER BY match_order",(r["id"],)).fetchall()
     heads="".join(f"<th>{x['username'][:7]}</th>" for x in users); body=f"<h1>Resumen</h1><p class=muted>{r['name']} · {len(users)} participantes</p><div class='card scroll'><table><tr><th>Partido</th>{heads}<th>Reparto</th></tr>"
     for m in ms:
         vals=[]; cnt={"1":0,"X":0,"2":0}
