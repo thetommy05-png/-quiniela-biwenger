@@ -133,42 +133,128 @@ def parse_events(data):
         except: hs=None
         try: a=int(a) if a is not None else None
         except: a=None
-        out.append({"id":str(e.get("id")),"home":(home.get("team") or {}).get("displayName",""),"away":(away.get("team") or {}).get("displayName",""),"kickoff":e.get("date"),"status":typ.get("name","STATUS_SCHEDULED"),"home_score":hs,"away_score":a})
+        week = e.get("week") or {}
+        round_number = week.get("number")
+        try:
+            round_number = int(round_number) if round_number is not None else None
+        except Exception:
+            round_number = None
+        out.append({
+            "id": str(e.get("id")),
+            "home": (home.get("team") or {}).get("displayName",""),
+            "away": (away.get("team") or {}).get("displayName",""),
+            "kickoff": e.get("date"),
+            "status": typ.get("name","STATUS_SCHEDULED"),
+            "home_score": hs,
+            "away_score": a,
+            "round_number": round_number
+        })
     return out
 
 def sync_rounds():
-    """Pull the published LaLiga calendar/results from ESPN without a paid API.
-    ESPN is queried by season date range; matches are grouped by round when
-    ESPN exposes the round/season metadata. If unavailable, no destructive
-    change is made.
+    """Sincroniza el calendario de LaLiga usando la jornada real que devuelve ESPN.
+    No agrupa simplemente de 10 en 10: esto evita que partidos aplazados
+    desplacen las jornadas (por ejemplo, que la J5 aparezca como J6).
     """
-    c=db()
+    c = db()
     try:
-        r=requests.get(ESPN_URL,params={"limit":1000,"dates":f"{SEASON_START.replace('-','')}-{SEASON_END.replace('-','')}","region":"es","lang":"es"},timeout=20)
-        r.raise_for_status(); events=parse_events(r.json())
+        r = requests.get(
+            ESPN_URL,
+            params={
+                "limit": 1000,
+                "dates": f"{SEASON_START.replace('-','')}-{SEASON_END.replace('-','')}",
+                "region": "es",
+                "lang": "es",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        events = parse_events(r.json())
     except Exception as e:
-        c.close(); return str(e)
-    events.sort(key=lambda x:x.get("kickoff") or "")
-    for idx in range(0,len(events),10):
-        group=events[idx:idx+10]
-        if len(group)<1: continue
-        number=idx//10+1
-        if number>38: break
-        rr=sql(c,"SELECT id FROM rounds WHERE number=?",(number,)).fetchone()
+        c.close()
+        return str(e)
+
+    events.sort(key=lambda x: x.get("kickoff") or "")
+
+    # Agrupar por el número de jornada real de ESPN.
+    grouped = {}
+    for e in events:
+        n = e.get("round_number")
+        if n is not None and 1 <= n <= 38:
+            grouped.setdefault(n, []).append(e)
+
+    # Fallback para APIs que no entreguen week.number.
+    if not grouped:
+        for idx in range(0, len(events), 10):
+            grouped[idx // 10 + 1] = events[idx:idx + 10]
+
+    for number in sorted(grouped):
+        if number < 1 or number > 38:
+            continue
+
+        group = grouped[number]
+        rr = sql(c, "SELECT id FROM rounds WHERE number=?", (number,)).fetchone()
+
         if rr:
-            rid=rr["id"] if hasattr(rr,"keys") else rr[0]
+            rid = rr["id"] if hasattr(rr, "keys") else rr[0]
         else:
-            cur=sql(c,"INSERT INTO rounds(number,name,open,synced_at) VALUES(?,?,?,?) RETURNING id",(number,f"Jornada {number}",True,datetime.now(timezone.utc).isoformat()))
-            rid=cur.fetchone()[0]
-        first_kickoff=group[0].get("kickoff")
-        for no,e in enumerate(group,1):
-            existing=sql(c,"SELECT id FROM matches WHERE external_id=?",(e["id"],)).fetchone()
+            cur = sql(
+                c,
+                "INSERT INTO rounds(number,name,open,synced_at) VALUES(?,?,?,?) RETURNING id",
+                (
+                    number,
+                    f"Jornada {number}",
+                    True,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            rid = cur.fetchone()[0]
+
+        group.sort(key=lambda x: x.get("kickoff") or "")
+
+        for no, e in enumerate(group, 1):
+            existing = sql(
+                c,
+                "SELECT id FROM matches WHERE external_id=?",
+                (e["id"],),
+            ).fetchone()
+
             if existing:
-                sql(c,"UPDATE matches SET home=?,away=?,kickoff=?,status=?,home_score=?,away_score=? WHERE external_id=?",(e["home"],e["away"],e["kickoff"],e["status"],e["home_score"],e["away_score"],e["id"]))
+                sql(
+                    c,
+                    """UPDATE matches
+                       SET round_id=?, match_order=?, home=?, away=?, kickoff=?,
+                           status=?, home_score=?, away_score=?
+                       WHERE external_id=?""",
+                    (
+                        rid, no, e["home"], e["away"], e["kickoff"],
+                        e["status"], e["home_score"], e["away_score"], e["id"],
+                    ),
+                )
             else:
-                sql(c,"INSERT INTO matches(round_id,match_order,home,away,kickoff,status,home_score,away_score,external_id) VALUES(?,?,?,?,?,?,?,?,?)",(rid,no,e["home"],e["away"],e["kickoff"],e["status"],e["home_score"],e["away_score"],e["id"]))
-        sql(c,"UPDATE rounds SET synced_at=?,close_at=? WHERE id=?",(datetime.now(timezone.utc).isoformat(),first_kickoff,rid))
-    c.commit(); c.close(); return None
+                sql(
+                    c,
+                    """INSERT INTO matches
+                       (round_id,match_order,home,away,kickoff,status,
+                        home_score,away_score,external_id)
+                       VALUES(?,?,?,?,?,?,?,?,?)""",
+                    (
+                        rid, no, e["home"], e["away"], e["kickoff"],
+                        e["status"], e["home_score"], e["away_score"], e["id"],
+                    ),
+                )
+
+        # La jornada se cierra al comienzo de su primer partido.
+        first_kickoff = group[0].get("kickoff") if group else None
+        sql(
+            c,
+            "UPDATE rounds SET synced_at=?,close_at=? WHERE id=?",
+            (datetime.now(timezone.utc).isoformat(), first_kickoff, rid),
+        )
+
+    c.commit()
+    c.close()
+    return None
 
 def auto_close():
     c=db()
@@ -185,17 +271,29 @@ def auto_close():
 # la siguiente jornada futura. Así nunca se muestra automáticamente la última
 # jornada de la temporada.
 def get_current_round(c):
-    now = datetime.now(timezone.utc).isoformat()
+    """Jornada visible para la quiniela.
+    Empieza en la J5 y después avanza a la siguiente jornada futura.
+    """
+    # Mientras la J5 exista, es la jornada inicial de esta quiniela.
     r = sql(
         c,
-        "SELECT * FROM rounds WHERE close_at IS NOT NULL AND close_at > ? ORDER BY number ASC LIMIT 1",
-        (now,)
+        "SELECT * FROM rounds WHERE number=5 LIMIT 1"
     ).fetchone()
     if r:
         return r
+
+    # Si por algún motivo aún no se ha sincronizado la J5, usa la primera
+    # jornada futura desde la J5.
+    now = datetime.now(timezone.utc).isoformat()
     return sql(
         c,
-        "SELECT * FROM rounds WHERE close_at IS NOT NULL ORDER BY number ASC LIMIT 1",
+        """SELECT * FROM rounds
+           WHERE number >= 5
+             AND close_at IS NOT NULL
+             AND close_at > ?
+           ORDER BY number ASC
+           LIMIT 1""",
+        (now,),
     ).fetchone()
 
 @app.route("/login",methods=["GET","POST"])
@@ -229,7 +327,7 @@ def home():
         st="CERRADA" if locked else (m["status"] if m["status"]!="STATUS_SCHEDULED" else "Pendiente")
         choices="".join(f'<a class="choice {"sel" if bets.get(m["id"])==p else ""}" href="{url_for("bet",match_id=m["id"],prediction=p)}">{p}</a>' for p in ("1","X","2"))
         rows+=f'<div class="match {"locked" if locked else ""}"><div>{m["match_order"]}</div><div class=teams>{m["home"]}<br>{m["away"]}<div class="status">{m["kickoff"] or ""} · {st}'+(f' · {m["home_score"]}-{m["away_score"]}' if actual else "")+f'</div></div><div class=choices>{choices}</div></div>'
-    body=f"<h1>{r['name']}</h1><p class=muted>Calendario y resultados automáticos · cierre automático al comenzar la jornada.</p><span class='badge {'closed' if not r['open'] else ''}'>{'CERRADA' if not r['open'] else 'ABIERTA'}</span><div class=card>{rows}</div><a class=btn href='{url_for('my_bet')}'>📝 Mi apuesta</a><a class='btn secondary' href='{url_for('summary')}'>📊 Resumen</a>"
+    body=f"<h1>{r['name']}</h1><p class=muted>{len(ms)} partidos · calendario y resultados automáticos · cierre automático al comenzar la jornada.</p><span class='badge {'closed' if not r['open'] else ''}'>{'CERRADA' if not r['open'] else 'ABIERTA'}</span><div class=card>{rows}</div><a class=btn href='{url_for('my_bet')}'>📝 Mi apuesta</a><a class='btn secondary' href='{url_for('summary')}'>📊 Resumen</a>"
     return page(body,u)
 
 @app.route("/bet/<int:match_id>/<prediction>")
