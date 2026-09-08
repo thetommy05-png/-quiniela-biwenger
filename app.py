@@ -22,6 +22,62 @@ SEASON_START = os.getenv("SEASON_START", "2026-08-01")
 SEASON_END = os.getenv("SEASON_END", "2027-06-30")
 PRIZE = 100000
 
+
+J5_FIXTURES = [
+    ("Sevilla FC", "Valencia CF", "2026-09-11T19:00:00+00:00"),
+    ("R. Racing Club", "Deportivo Alavés", "2026-09-12T12:00:00+00:00"),
+    ("CA Osasuna", "RCD Espanyol de Barcelona", "2026-09-12T14:15:00+00:00"),
+    ("Athletic Club", "Elche CF", "2026-09-12T16:30:00+00:00"),
+    ("Real Madrid", "Rayo Vallecano", "2026-09-12T19:00:00+00:00"),
+    ("Celta", "Málaga CF", "2026-09-13T12:00:00+00:00"),
+    ("Levante UD", "FC Barcelona", "2026-09-13T14:15:00+00:00"),
+    ("Getafe CF", "RC Deportivo", "2026-09-13T16:30:00+00:00"),
+    ("Real Sociedad", "Atlético de Madrid", "2026-09-13T19:00:00+00:00"),
+    ("Villarreal CF", "Real Betis", "2026-09-14T19:00:00+00:00"),
+]
+
+def ensure_j5(c):
+    rr = sql(c, "SELECT id FROM rounds WHERE number=?", (5,)).fetchone()
+    if rr:
+        rid = rr["id"] if hasattr(rr, "keys") else rr[0]
+    else:
+        cur = sql(
+            c,
+            "INSERT INTO rounds(number,name,open,synced_at,close_at) VALUES(?,?,?,?,?) RETURNING id",
+            (5, "Jornada 5", True, datetime.now(timezone.utc).isoformat(), J5_FIXTURES[0][2]),
+        )
+        rid = cur.fetchone()[0]
+
+    for no, (home, away, kickoff) in enumerate(J5_FIXTURES, 1):
+        existing = sql(
+            c,
+            "SELECT id FROM matches WHERE round_id=? AND match_order=?",
+            (rid, no),
+        ).fetchone()
+        if existing:
+            sql(
+                c,
+                """UPDATE matches
+                   SET home=?, away=?, kickoff=?
+                   WHERE round_id=? AND match_order=?""",
+                (home, away, kickoff, rid, no),
+            )
+        else:
+            sql(
+                c,
+                """INSERT INTO matches
+                   (round_id,match_order,home,away,kickoff,status)
+                   VALUES(?,?,?,?,?,'STATUS_SCHEDULED')""",
+                (rid, no, home, away, kickoff),
+            )
+
+    sql(
+        c,
+        "UPDATE rounds SET synced_at=?, close_at=? WHERE id=?",
+        (datetime.now(timezone.utc).isoformat(), J5_FIXTURES[0][2], rid),
+    )
+    return rid
+
 USERS = [
     ("Cablo Parmena", False), ("Ojeadores de rondos", False),
     ("AC Decza", False), ("MiCapitan FC", False),
@@ -88,6 +144,7 @@ def init_db():
     for name,admin in USERS:
         if not sql(c,"SELECT id FROM users WHERE username=?",(name,)).fetchone():
             sql(c,"INSERT INTO users(username,password,is_admin) VALUES(?,?,?)",(name,generate_password_hash(DEFAULT_PASSWORD),admin))
+    ensure_j5(c)
     c.commit(); c.close()
 
 def current_user():
@@ -152,17 +209,18 @@ def parse_events(data):
     return out
 
 def sync_rounds():
-    """Sincroniza el calendario de LaLiga usando la jornada real que devuelve ESPN.
-    No agrupa simplemente de 10 en 10: esto evita que partidos aplazados
-    desplacen las jornadas (por ejemplo, que la J5 aparezca como J6).
+    """Synchronize Jornada 5 without mixing other jornadas.
+    The fixture list and kickoff times come from the official LaLiga schedule;
+    ESPN is used only to update scores/statuses by matching teams.
     """
     c = db()
     try:
+        ensure_j5(c)
         r = requests.get(
             ESPN_URL,
             params={
-                "limit": 1000,
-                "dates": f"{SEASON_START.replace('-','')}-{SEASON_END.replace('-','')}",
+                "limit": 100,
+                "dates": "20260911-20260914",
                 "region": "es",
                 "lang": "es",
             },
@@ -171,85 +229,62 @@ def sync_rounds():
         r.raise_for_status()
         events = parse_events(r.json())
     except Exception as e:
+        c.commit()
         c.close()
         return str(e)
 
-    events.sort(key=lambda x: x.get("kickoff") or "")
+    def norm(s):
+        return "".join(ch.lower() for ch in (s or "") if ch.isalnum())
 
-    # Agrupar por el número de jornada real de ESPN.
-    grouped = {}
+    def same_team(a, b):
+        a, b = norm(a), norm(b)
+        aliases = {
+            "sevillafc": "sevillafc",
+            "valenciacf": "valenciacf",
+            "rracingclub": "rracingclub",
+            "deportivoalaves": "deportivoalaves",
+            "caosasuna": "caosasuna",
+            "rcdespanoldbarcelona": "rcdespanoldbarcelona",
+            "athleticclub": "athleticclub",
+            "elchecf": "elchecf",
+            "realmadrid": "realmadrid",
+            "rayovallecano": "rayovallecano",
+            "rcelta": "rcelta",
+            "celta": "rcelta",
+            "malagacf": "malagacf",
+            "levanteud": "levanteud",
+            "fcbarcelona": "fcbarcelona",
+            "getafecf": "getafecf",
+            "rcdeportivo": "rcdeportivo",
+            "realsociedad": "realsociedad",
+            "atleticodemadrid": "atleticodemadrid",
+            "villarrealcf": "villarrealcf",
+            "realbetis": "realbetis",
+            "betis": "realbetis",
+        }
+        return aliases.get(a, a) == aliases.get(b, b)
+
+    sql(c, "SELECT id FROM rounds WHERE number=?", (5,))
+    rr = sql(c, "SELECT id FROM rounds WHERE number=?", (5,)).fetchone()
+    rid = rr["id"] if hasattr(rr, "keys") else rr[0]
+
     for e in events:
-        n = e.get("round_number")
-        if n is not None and 1 <= n <= 38:
-            grouped.setdefault(n, []).append(e)
-
-    # Fallback para APIs que no entreguen week.number.
-    if not grouped:
-        for idx in range(0, len(events), 10):
-            grouped[idx // 10 + 1] = events[idx:idx + 10]
-
-    for number in sorted(grouped):
-        if number < 1 or number > 38:
+        target = None
+        for no, (home, away, _kickoff) in enumerate(J5_FIXTURES, 1):
+            if same_team(home, e["home"]) and same_team(away, e["away"]):
+                target = no
+                break
+        if not target:
             continue
-
-        group = grouped[number]
-        rr = sql(c, "SELECT id FROM rounds WHERE number=?", (number,)).fetchone()
-
-        if rr:
-            rid = rr["id"] if hasattr(rr, "keys") else rr[0]
-        else:
-            cur = sql(
-                c,
-                "INSERT INTO rounds(number,name,open,synced_at) VALUES(?,?,?,?) RETURNING id",
-                (
-                    number,
-                    f"Jornada {number}",
-                    True,
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-            rid = cur.fetchone()[0]
-
-        group.sort(key=lambda x: x.get("kickoff") or "")
-
-        for no, e in enumerate(group, 1):
-            existing = sql(
-                c,
-                "SELECT id FROM matches WHERE external_id=?",
-                (e["id"],),
-            ).fetchone()
-
-            if existing:
-                sql(
-                    c,
-                    """UPDATE matches
-                       SET round_id=?, match_order=?, home=?, away=?, kickoff=?,
-                           status=?, home_score=?, away_score=?
-                       WHERE external_id=?""",
-                    (
-                        rid, no, e["home"], e["away"], e["kickoff"],
-                        e["status"], e["home_score"], e["away_score"], e["id"],
-                    ),
-                )
-            else:
-                sql(
-                    c,
-                    """INSERT INTO matches
-                       (round_id,match_order,home,away,kickoff,status,
-                        home_score,away_score,external_id)
-                       VALUES(?,?,?,?,?,?,?,?,?)""",
-                    (
-                        rid, no, e["home"], e["away"], e["kickoff"],
-                        e["status"], e["home_score"], e["away_score"], e["id"],
-                    ),
-                )
-
-        # La jornada se cierra al comienzo de su primer partido.
-        first_kickoff = group[0].get("kickoff") if group else None
         sql(
             c,
-            "UPDATE rounds SET synced_at=?,close_at=? WHERE id=?",
-            (datetime.now(timezone.utc).isoformat(), first_kickoff, rid),
+            """UPDATE matches
+               SET home=?, away=?, kickoff=?, status=?, home_score=?, away_score=?, external_id=?
+               WHERE round_id=? AND match_order=?""",
+            (
+                e["home"], e["away"], e["kickoff"], e["status"],
+                e["home_score"], e["away_score"], e["id"], rid, target
+            ),
         )
 
     c.commit()
@@ -271,30 +306,35 @@ def auto_close():
 # la siguiente jornada futura. Así nunca se muestra automáticamente la última
 # jornada de la temporada.
 def get_current_round(c):
-    """Jornada visible para la quiniela.
-    Empieza en la J5 y después avanza a la siguiente jornada futura.
+    """Start the quiniela at Jornada 5 and, once it has closed, advance to
+    the next scheduled round if one exists. Never choose the last round just
+    because it has the highest number.
     """
-    # Mientras la J5 exista, es la jornada inicial de esta quiniela.
-    r = sql(
-        c,
-        "SELECT * FROM rounds WHERE number=5 LIMIT 1"
-    ).fetchone()
-    if r:
-        return r
+    r = sql(c, "SELECT * FROM rounds WHERE number=5 LIMIT 1").fetchone()
+    if not r:
+        ensure_j5(c)
+        c.commit()
+        r = sql(c, "SELECT * FROM rounds WHERE number=5 LIMIT 1").fetchone()
 
-    # Si por algún motivo aún no se ha sincronizado la J5, usa la primera
-    # jornada futura desde la J5.
-    now = datetime.now(timezone.utc).isoformat()
-    return sql(
+    now = datetime.now(timezone.utc)
+    if r:
+        try:
+            close_at = r["close_at"]
+            if close_at:
+                dt = datetime.fromisoformat(str(close_at).replace("Z", "+00:00"))
+                if dt > now:
+                    return r
+        except Exception:
+            return r
+
+    nxt = sql(
         c,
         """SELECT * FROM rounds
-           WHERE number >= 5
-             AND close_at IS NOT NULL
-             AND close_at > ?
+           WHERE number > 5 AND close_at IS NOT NULL
            ORDER BY number ASC
            LIMIT 1""",
-        (now,),
     ).fetchone()
+    return nxt or r
 
 @app.route("/login",methods=["GET","POST"])
 def login():
