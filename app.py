@@ -167,7 +167,7 @@ def admin_required(fn):
     return w
 
 def page(body,u=None):
-    layout=CSS+""" {% if user %}<div class=app><header><div class=top><div class=logo>BIWENGER <b>QUINIELA</b></div><div>{{user["username"]}}</div></div></header><main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main><div class=nav><a href="{{url_for('home')}}">⚽<b>Jornada</b></a><a href="{{url_for('my_bet')}}">📝<b>Mi apuesta</b></a><a href="{{url_for('summary')}}">📊<b>Resumen</b></a><a href="{{url_for('ranking')}}">🏆<b>Clasificación</b></a>{% if user["is_admin"] %}<a href="{{url_for('admin')}}">⚙️<b>Admin</b></a>{% endif %}<a href="{{url_for('logout')}}">↪<b>Salir</b></a></div></div>{% else %}{{body|safe}}{% endif %}"""
+    layout=CSS+""" {% if user %}<div class=app><header><div class=top><div class=logo>BIWENGER <b>QUINIELA</b></div><div>{{user["username"]}}</div></div></header><main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main><div class=nav><a href="{{url_for('home')}}">⚽<b>Jornada</b></a><a href="{{url_for('my_bet')}}">📝<b>Mi apuesta</b></a><a href="{{url_for('summary')}}">📊<b>Resumen</b></a><a href="{{url_for('ranking')}}">🏆<b>Clasificación</b></a><a href="{{url_for('change_password')}}">🔑<b>Contraseña</b></a>{% if user["is_admin"] %}<a href="{{url_for('admin')}}">⚙️<b>Admin</b></a>{% endif %}<a href="{{url_for('logout')}}">↪<b>Salir</b></a></div></div>{% else %}{{body|safe}}{% endif %}"""
     return render_template_string(layout,body=body,user=u)
 
 def outcome(h,a):
@@ -347,6 +347,45 @@ def login():
     opts="".join(f"<option value='{n}'>{n}</option>" for n,_ in USERS)
     body=f"""<div class=login><div class=card><div class=logo style='text-align:center;font-size:25px'>BIWENGER <b>QUINIELA</b></div><p class=muted style='text-align:center'>11 participantes · acceso privado</p><form method=post><label>Usuario</label><select name=username required>{opts}</select><label>Contraseña</label><input type=password name=password required autocomplete=current-password><button class=btn>Iniciar sesión</button></form><p class=muted>Contraseña inicial: <b>{DEFAULT_PASSWORD}</b></p></div></div>"""
     return page(body)
+
+@app.route("/cambiar-password", methods=["GET","POST"])
+@login_required
+def change_password():
+    u = current_user()
+    if request.method == "POST":
+        actual = request.form.get("current_password", "")
+        nueva = request.form.get("new_password", "")
+        confirm = request.form.get("confirm_password", "")
+        if not check_password_hash(u["password"], actual):
+            flash("La contraseña actual no es correcta.")
+        elif len(nueva) < 4:
+            flash("La nueva contraseña debe tener al menos 4 caracteres.")
+        elif nueva != confirm:
+            flash("Las nuevas contraseñas no coinciden.")
+        else:
+            c = db()
+            sql(c, "UPDATE users SET password=? WHERE id=?", (generate_password_hash(nueva), u["id"]))
+            c.commit()
+            c.close()
+            flash("Contraseña cambiada correctamente.")
+            return redirect(url_for("home"))
+
+    body = """
+    <h1>Cambiar contraseña</h1>
+    <p class=muted>Puedes cambiar tu contraseña cuando quieras.</p>
+    <div class=card>
+      <form method=post>
+        <label>Contraseña actual</label>
+        <input type=password name=current_password required autocomplete=current-password>
+        <label>Nueva contraseña</label>
+        <input type=password name=new_password required minlength=4 autocomplete=new-password>
+        <label>Repite la nueva contraseña</label>
+        <input type=password name=confirm_password required minlength=4 autocomplete=new-password>
+        <button class="btn">🔑 Cambiar contraseña</button>
+      </form>
+    </div>
+    """
+    return page(body, u)
 
 @app.route("/logout")
 def logout(): session.clear(); return redirect(url_for("login"))
