@@ -170,6 +170,17 @@ def page(body,u=None):
     layout=CSS+""" {% if user %}<div class=app><header><div class=top><div class=logo>BIWENGER <b>QUINIELA</b></div><div>{{user["username"]}}</div></div></header><main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main><div class=nav><a href="{{url_for('home')}}">⚽<b>Jornada</b></a><a href="{{url_for('my_bet')}}">📝<b>Mi apuesta</b></a><a href="{{url_for('summary')}}">📊<b>Resumen</b></a><a href="{{url_for('ranking')}}">🏆<b>Clasificación</b></a><a href="{{url_for('change_password')}}">🔑<b>Contraseña</b></a>{% if user["is_admin"] %}<a href="{{url_for('admin')}}">⚙️<b>Admin</b></a>{% endif %}<a href="{{url_for('logout')}}">↪<b>Salir</b></a></div></div>{% else %}{{body|safe}}{% endif %}"""
     return render_template_string(layout,body=body,user=u)
 
+def match_is_locked(m):
+    """A match cannot be changed once its own kickoff time has arrived."""
+    if not m["kickoff"]:
+        return False
+    try:
+        kickoff = datetime.fromisoformat(str(m["kickoff"]).replace("Z", "+00:00"))
+        return kickoff <= datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
 def outcome(h,a):
     if h is None or a is None:return None
     return "1" if h>a else ("2" if h<a else "X")
@@ -306,35 +317,46 @@ def auto_close():
 # la siguiente jornada futura. Así nunca se muestra automáticamente la última
 # jornada de la temporada.
 def get_current_round(c):
-    """Start the quiniela at Jornada 5 and, once it has closed, advance to
-    the next scheduled round if one exists. Never choose the last round just
-    because it has the highest number.
+    """Return the current betting round from Jornada 6 onward.
+    A round remains current until all of its matches have started.
+    Individual matches are locked by their own kickoff time.
+    This function never modifies users, passwords or bets.
     """
-    r = sql(c, "SELECT * FROM rounds WHERE number=5 LIMIT 1").fetchone()
-    if not r:
-        ensure_j5(c)
-        c.commit()
-        r = sql(c, "SELECT * FROM rounds WHERE number=5 LIMIT 1").fetchone()
-
     now = datetime.now(timezone.utc)
-    if r:
-        try:
-            close_at = r["close_at"]
-            if close_at:
-                dt = datetime.fromisoformat(str(close_at).replace("Z", "+00:00"))
-                if dt > now:
-                    return r
-        except Exception:
-            return r
 
-    nxt = sql(
+    # Start from Jornada 6. Pick the first round that still has at least
+    # one match whose kickoff is in the future.
+    rounds = sql(
         c,
         """SELECT * FROM rounds
-           WHERE number > 5 AND close_at IS NOT NULL
-           ORDER BY number ASC
-           LIMIT 1""",
-    ).fetchone()
-    return nxt or r
+           WHERE number >= 6
+           ORDER BY number ASC"""
+    ).fetchall()
+
+    for r in rounds:
+        matches = sql(
+            c,
+            "SELECT kickoff FROM matches WHERE round_id=? ORDER BY match_order",
+            (r["id"],)
+        ).fetchall()
+
+        if not matches:
+            continue
+
+        for m in matches:
+            kickoff = m["kickoff"]
+            if not kickoff:
+                return r
+            try:
+                dt = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+                if dt > now:
+                    return r
+            except Exception:
+                return r
+
+    # If every match from J6 onward has already started, keep the last
+    # available round rather than showing an unrelated previous round.
+    return rounds[-1] if rounds else None
 
 @app.route("/login",methods=["GET","POST"])
 def login():
@@ -402,9 +424,14 @@ def home():
     rows=""
     for m in ms:
         actual=outcome(m["home_score"],m["away_score"])
-        locked=not r["open"]
+        locked=(not r["open"]) or match_is_locked(m)
         st="CERRADA" if locked else (m["status"] if m["status"]!="STATUS_SCHEDULED" else "Pendiente")
-        choices="".join(f'<a class="choice {"sel" if bets.get(m["id"])==p else ""}" href="{url_for("bet",match_id=m["id"],prediction=p)}">{p}</a>' for p in ("1","X","2"))
+        choices="".join(
+            (f'<span class="choice {"sel" if bets.get(m["id"])==p else ""}">{p}</span>'
+             if locked else
+             f'<a class="choice {"sel" if bets.get(m["id"])==p else ""}" href="{url_for("bet",match_id=m["id"],prediction=p)}">{p}</a>')
+            for p in ("1","X","2")
+        )
         rows+=f'<div class="match {"locked" if locked else ""}"><div>{m["match_order"]}</div><div class=teams>{m["home"]}<br>{m["away"]}<div class="status">{m["kickoff"] or ""} · {st}'+(f' · {m["home_score"]}-{m["away_score"]}' if actual else "")+f'</div></div><div class=choices>{choices}</div></div>'
     body=f"<h1>{r['name']}</h1><p class=muted>{len(ms)} partidos · calendario y resultados automáticos · cierre automático al comenzar la jornada.</p><span class='badge {'closed' if not r['open'] else ''}'>{'CERRADA' if not r['open'] else 'ABIERTA'}</span><div class=card>{rows}</div><a class=btn href='{url_for('my_bet')}'>📝 Mi apuesta</a><a class='btn secondary' href='{url_for('summary')}'>📊 Resumen</a>"
     return page(body,u)
@@ -416,18 +443,19 @@ def bet(match_id,prediction):
     auto_close(); u=current_user(); c=db(); m=sql(c,"SELECT * FROM matches WHERE id=?",(match_id,)).fetchone()
     if not m: c.close(); abort(404)
     r=sql(c,"SELECT * FROM rounds WHERE id=?",(m["round_id"],)).fetchone()
-    if not r["open"]: flash("La jornada ya está cerrada. No se puede modificar ninguna apuesta.")
+    if not r["open"]:
+        flash("La jornada ya está cerrada. No se puede modificar ninguna apuesta.")
+    elif match_is_locked(m):
+        flash("El partido ya ha comenzado. Apuesta bloqueada.")
     else:
-        if m["kickoff"]:
-            try:
-                if datetime.fromisoformat(str(m["kickoff"]).replace("Z","+00:00"))<=datetime.now(timezone.utc):
-                    sql(c,"UPDATE rounds SET open=0 WHERE id=?",(r["id"],)); flash("El partido ya ha comenzado. Apuesta bloqueada.")
-                else:
-                    sql(c,"INSERT INTO bets(user_id,match_id,prediction) VALUES(?,?,?) ON CONFLICT(user_id,match_id) DO UPDATE SET prediction=EXCLUDED.prediction" if DATABASE_URL else "INSERT OR REPLACE INTO bets(user_id,match_id,prediction) VALUES(?,?,?)",(u["id"],match_id,prediction))
-                    c.commit()
-            except Exception: pass
-        else:
-            sql(c,"INSERT INTO bets(user_id,match_id,prediction) VALUES(?,?,?) ON CONFLICT(user_id,match_id) DO UPDATE SET prediction=EXCLUDED.prediction" if DATABASE_URL else "INSERT OR REPLACE INTO bets(user_id,match_id,prediction) VALUES(?,?,?)",(u["id"],match_id,prediction)); c.commit()
+        sql(
+            c,
+            "INSERT INTO bets(user_id,match_id,prediction) VALUES(?,?,?) ON CONFLICT(user_id,match_id) DO UPDATE SET prediction=EXCLUDED.prediction"
+            if DATABASE_URL else
+            "INSERT OR REPLACE INTO bets(user_id,match_id,prediction) VALUES(?,?,?)",
+            (u["id"], match_id, prediction)
+        )
+        c.commit()
     c.close(); return redirect(url_for("home"))
 
 @app.route("/mi-apuesta")
