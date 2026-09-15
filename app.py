@@ -36,6 +36,71 @@ J5_FIXTURES = [
     ("Villarreal CF", "Real Betis", "2026-09-14T19:00:00+00:00"),
 ]
 
+
+J6_FIXTURES = [
+    ("Real Sociedad", "Celta", "2026-09-03T21:00:00+02:00", 0, 0, "STATUS_FINAL"),
+    ("Rayo Vallecano", "RCD Espanyol de Barcelona", "2026-09-15T19:00:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("Deportivo Alavés", "Valencia CF", "2026-09-15T20:00:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("Elche CF", "Real Madrid", "2026-09-15T21:30:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("Atlético de Madrid", "CA Osasuna", "2026-09-16T19:00:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("RC Deportivo", "Sevilla FC", "2026-09-16T19:00:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("FC Barcelona", "R. Racing Club", "2026-09-16T21:30:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("Levante UD", "Athletic Club", "2026-09-16T21:30:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("Real Betis", "Getafe CF", "2026-09-17T19:00:00+02:00", None, None, "STATUS_SCHEDULED"),
+    ("Málaga CF", "Villarreal CF", "2026-09-17T21:30:00+02:00", None, None, "STATUS_SCHEDULED"),
+]
+
+def ensure_j6(c):
+    rr = sql(c, "SELECT id FROM rounds WHERE number=?", (6,)).fetchone()
+    if rr:
+        rid = rr["id"] if hasattr(rr, "keys") else rr[0]
+    else:
+        cur = sql(
+            c,
+            "INSERT INTO rounds(number,name,open,synced_at,close_at) VALUES(?,?,?,?,?) RETURNING id",
+            (6, "Jornada 6", True, datetime.now(timezone.utc).isoformat(), J6_FIXTURES[-1][2]),
+        )
+        rid = cur.fetchone()[0]
+
+    for no, (home, away, kickoff, hs, aws, status) in enumerate(J6_FIXTURES, 1):
+        existing = sql(
+            c, "SELECT id FROM matches WHERE round_id=? AND match_order=?", (rid, no)
+        ).fetchone()
+        if existing:
+            # Only populate the fixed schedule/result if the row is still
+            # unplayed/scheduled. Never overwrite a result that may have
+            # been synchronized from the provider.
+            sql(
+                c,
+                """UPDATE matches
+                   SET home=?, away=?, kickoff=?
+                   WHERE round_id=? AND match_order=?""",
+                (home, away, kickoff, rid, no),
+            )
+            if hs is not None:
+                sql(
+                    c,
+                    """UPDATE matches
+                       SET status=?, home_score=?, away_score=?
+                       WHERE round_id=? AND match_order=?""",
+                    (status, hs, aws, rid, no),
+                )
+        else:
+            sql(
+                c,
+                """INSERT INTO matches
+                   (round_id,match_order,home,away,kickoff,status,home_score,away_score)
+                   VALUES(?,?,?,?,?,?,?,?)""",
+                (rid, no, home, away, kickoff, status, hs, aws),
+            )
+
+    sql(
+        c,
+        "UPDATE rounds SET synced_at=?, close_at=? WHERE id=?",
+        (datetime.now(timezone.utc).isoformat(), J6_FIXTURES[-1][2], rid),
+    )
+    return rid
+
 def ensure_j5(c):
     rr = sql(c, "SELECT id FROM rounds WHERE number=?", (5,)).fetchone()
     if rr:
@@ -145,6 +210,7 @@ def init_db():
         if not sql(c,"SELECT id FROM users WHERE username=?",(name,)).fetchone():
             sql(c,"INSERT INTO users(username,password,is_admin) VALUES(?,?,?)",(name,generate_password_hash(DEFAULT_PASSWORD),admin))
     ensure_j5(c)
+    ensure_j6(c)
     c.commit(); c.close()
 
 def current_user():
@@ -169,17 +235,6 @@ def admin_required(fn):
 def page(body,u=None):
     layout=CSS+""" {% if user %}<div class=app><header><div class=top><div class=logo>BIWENGER <b>QUINIELA</b></div><div>{{user["username"]}}</div></div></header><main>{% with messages=get_flashed_messages() %}{% for m in messages %}<div class=flash>{{m}}</div>{% endfor %}{% endwith %}{{body|safe}}</main><div class=nav><a href="{{url_for('home')}}">⚽<b>Jornada</b></a><a href="{{url_for('my_bet')}}">📝<b>Mi apuesta</b></a><a href="{{url_for('summary')}}">📊<b>Resumen</b></a><a href="{{url_for('ranking')}}">🏆<b>Clasificación</b></a><a href="{{url_for('change_password')}}">🔑<b>Contraseña</b></a>{% if user["is_admin"] %}<a href="{{url_for('admin')}}">⚙️<b>Admin</b></a>{% endif %}<a href="{{url_for('logout')}}">↪<b>Salir</b></a></div></div>{% else %}{{body|safe}}{% endif %}"""
     return render_template_string(layout,body=body,user=u)
-
-def match_is_locked(m):
-    """A match cannot be changed once its own kickoff time has arrived."""
-    if not m["kickoff"]:
-        return False
-    try:
-        kickoff = datetime.fromisoformat(str(m["kickoff"]).replace("Z", "+00:00"))
-        return kickoff <= datetime.now(timezone.utc)
-    except Exception:
-        return False
-
 
 def outcome(h,a):
     if h is None or a is None:return None
@@ -316,46 +371,41 @@ def auto_close():
 # NUEVO: devuelve la jornada que está actualmente en juego o, si ya terminó,
 # la siguiente jornada futura. Así nunca se muestra automáticamente la última
 # jornada de la temporada.
+def match_is_locked(m):
+    """Lock only a match whose own kickoff has arrived."""
+    kickoff = m["kickoff"]
+    if not kickoff:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+        return dt <= datetime.now(timezone.utc)
+    except Exception:
+        return False
+
 def get_current_round(c):
-    """Return the current betting round from Jornada 6 onward.
-    A round remains current until all of its matches have started.
-    Individual matches are locked by their own kickoff time.
-    This function never modifies users, passwords or bets.
+    """Return J6 while it still has at least one future match.
+    Then advance to the next round. Never hide J6 just because one match
+    was played earlier.
     """
+    ensure_j6(c)
+    c.commit()
+    rounds = sql(c, "SELECT * FROM rounds WHERE number>=6 ORDER BY number ASC").fetchall()
     now = datetime.now(timezone.utc)
 
-    # Start from Jornada 6. Pick the first round that still has at least
-    # one match whose kickoff is in the future.
-    rounds = sql(
-        c,
-        """SELECT * FROM rounds
-           WHERE number >= 6
-           ORDER BY number ASC"""
-    ).fetchall()
-
     for r in rounds:
-        matches = sql(
-            c,
-            "SELECT kickoff FROM matches WHERE round_id=? ORDER BY match_order",
-            (r["id"],)
-        ).fetchall()
-
-        if not matches:
+        ms = sql(c, "SELECT kickoff FROM matches WHERE round_id=? ORDER BY match_order", (r["id"],)).fetchall()
+        if not ms:
             continue
-
-        for m in matches:
-            kickoff = m["kickoff"]
-            if not kickoff:
+        for m in ms:
+            if not m["kickoff"]:
                 return r
             try:
-                dt = datetime.fromisoformat(str(kickoff).replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(str(m["kickoff"]).replace("Z", "+00:00"))
                 if dt > now:
                     return r
             except Exception:
                 return r
 
-    # If every match from J6 onward has already started, keep the last
-    # available round rather than showing an unrelated previous round.
     return rounds[-1] if rounds else None
 
 @app.route("/login",methods=["GET","POST"])
@@ -427,9 +477,9 @@ def home():
         locked=(not r["open"]) or match_is_locked(m)
         st="CERRADA" if locked else (m["status"] if m["status"]!="STATUS_SCHEDULED" else "Pendiente")
         choices="".join(
-            (f'<span class="choice {"sel" if bets.get(m["id"])==p else ""}">{p}</span>'
-             if locked else
-             f'<a class="choice {"sel" if bets.get(m["id"])==p else ""}" href="{url_for("bet",match_id=m["id"],prediction=p)}">{p}</a>')
+            f'<span class="choice {"sel" if bets.get(m["id"])==p else ""}">{p}</span>'
+            if locked else
+            f'<a class="choice {"sel" if bets.get(m["id"])==p else ""}" href="{url_for("bet",match_id=m["id"],prediction=p)}">{p}</a>'
             for p in ("1","X","2")
         )
         rows+=f'<div class="match {"locked" if locked else ""}"><div>{m["match_order"]}</div><div class=teams>{m["home"]}<br>{m["away"]}<div class="status">{m["kickoff"] or ""} · {st}'+(f' · {m["home_score"]}-{m["away_score"]}' if actual else "")+f'</div></div><div class=choices>{choices}</div></div>'
