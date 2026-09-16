@@ -426,16 +426,20 @@ def match_is_locked(m):
         return False
 
 def get_current_round(c):
-    """Return J6 while it still has at least one future match.
-    Then advance to the next round. Never hide J6 just because one match
-    was played earlier.
+    """Show the latest prepared round with future matches.
+    J7 is intentionally available before its first kickoff so users can
+    fill in their quiniela in advance. Once a later round is prepared,
+    it becomes available without deleting previous-round data.
     """
     ensure_j6(c)
     ensure_j7(c)
     c.commit()
-    rounds = sql(c, "SELECT * FROM rounds WHERE number>=6 ORDER BY number ASC").fetchall()
-    now = datetime.now(timezone.utc)
 
+    # Prefer the highest prepared round that has at least one match not yet
+    # started. This makes J7 visible now while keeping J6 and its bets/results
+    # stored in the database.
+    rounds = sql(c, "SELECT * FROM rounds WHERE number>=6 ORDER BY number DESC").fetchall()
+    now = datetime.now(timezone.utc)
     for r in rounds:
         ms = sql(c, "SELECT kickoff FROM matches WHERE round_id=? ORDER BY match_order", (r["id"],)).fetchall()
         if not ms:
@@ -450,7 +454,7 @@ def get_current_round(c):
             except Exception:
                 return r
 
-    return rounds[-1] if rounds else None
+    return rounds[0] if rounds else None
 
 @app.route("/login",methods=["GET","POST"])
 def login():
