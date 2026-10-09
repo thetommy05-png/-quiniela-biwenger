@@ -471,6 +471,7 @@ def get_current_round(c):
     """
     ensure_j6(c)
     ensure_j7(c)
+    ensure_j8(c)
     c.commit()
 
     # Prefer the highest prepared round that has at least one match not yet
