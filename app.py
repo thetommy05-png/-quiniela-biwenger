@@ -65,6 +65,20 @@ J6_FIXTURES = [
     ("Málaga CF", "Villarreal CF", "2026-09-17T21:30:00+02:00", None, None, "STATUS_SCHEDULED"),
 ]
 
+
+J8_FIXTURES = [
+    ("Málaga CF", "RCD Espanyol de Barcelona", "2026-10-09T21:00:00+02:00"),
+    ("Rayo Vallecano", "Athletic Club", "2026-10-10T14:00:00+02:00"),
+    ("Deportivo Alavés", "Atlético de Madrid", "2026-10-10T16:15:00+02:00"),
+    ("FC Barcelona", "Getafe CF", "2026-10-10T18:30:00+02:00"),
+    ("Real Madrid", "Villarreal CF", "2026-10-10T21:00:00+02:00"),
+    ("Elche CF", "Celta", "2026-10-11T14:00:00+02:00"),
+    ("Real Sociedad", "RC Deportivo", "2026-10-11T16:15:00+02:00"),
+    ("Real Betis", "CA Osasuna", "2026-10-11T18:30:00+02:00"),
+    ("R. Racing Club", "Valencia CF", "2026-10-11T21:00:00+02:00"),
+    ("Levante UD", "Sevilla FC", "2026-10-12T21:00:00+02:00"),
+]
+
 def ensure_j6(c):
     rr = sql(c, "SELECT id FROM rounds WHERE number=?", (6,)).fetchone()
     if rr:
@@ -141,6 +155,29 @@ def ensure_j7(c):
 
     sql(c, "UPDATE rounds SET synced_at=?, close_at=? WHERE id=?",
         (datetime.now(timezone.utc).isoformat(), J7_FIXTURES[-1][2], rid))
+    return rid
+
+def ensure_j8(c):
+    """Create/update the official Jornada 8 fixture list without touching users or bets."""
+    rr = sql(c, "SELECT id FROM rounds WHERE number=?", (8,)).fetchone()
+    if rr:
+        rid = rr["id"] if hasattr(rr, "keys") else rr[0]
+    else:
+        cur = sql(c,
+            "INSERT INTO rounds(number,name,open,synced_at,close_at) VALUES(?,?,?,?,?) RETURNING id",
+            (8, "Jornada 8", True, datetime.now(timezone.utc).isoformat(), J8_FIXTURES[-1][2]))
+        rid = cur.fetchone()[0]
+
+    for no, (home, away, kickoff) in enumerate(J8_FIXTURES, 1):
+        existing = sql(c, "SELECT id FROM matches WHERE round_id=? AND match_order=?", (rid, no)).fetchone()
+        if existing:
+            sql(c, "UPDATE matches SET home=?, away=?, kickoff=? WHERE round_id=? AND match_order=?",
+                (home, away, kickoff, rid, no))
+        else:
+            sql(c, "INSERT INTO matches(round_id,match_order,home,away,kickoff,status) VALUES(?,?,?,?,?,'STATUS_SCHEDULED')",
+                (rid, no, home, away, kickoff))
+    sql(c, "UPDATE rounds SET synced_at=?, close_at=? WHERE id=?",
+        (datetime.now(timezone.utc).isoformat(), J8_FIXTURES[-1][2], rid))
     return rid
 
 def ensure_j5(c):
@@ -254,6 +291,7 @@ def init_db():
     ensure_j5(c)
     ensure_j6(c)
     ensure_j7(c)
+    ensure_j8(c)
     c.commit(); c.close()
 
 def current_user():
