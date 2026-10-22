@@ -93,6 +93,19 @@ J9_FIXTURES = [
     ("Getafe CF", "Rayo Vallecano", "2026-10-19T21:00:00+02:00"),
 ]
 
+J10_FIXTURES = [
+    ("Deportivo Alavés", "Málaga CF", "2026-10-23T21:00:00+02:00"),
+    ("Rayo Vallecano", "Elche CF", "2026-10-24T14:00:00+02:00"),
+    ("R. Racing Club", "RCD Espanyol de Barcelona", "2026-10-24T16:15:00+02:00"),
+    ("Valencia CF", "Villarreal CF", "2026-10-24T18:30:00+02:00"),
+    ("Atlético de Madrid", "RC Deportivo", "2026-10-24T21:00:00+02:00"),
+    ("Athletic Club", "Getafe CF", "2026-10-25T14:00:00+01:00"),
+    ("Celta", "Real Betis", "2026-10-25T16:15:00+01:00"),
+    ("Real Sociedad", "Levante UD", "2026-10-25T18:30:00+01:00"),
+    ("FC Barcelona", "Real Madrid", "2026-10-25T21:00:00+01:00"),
+    ("Sevilla FC", "CA Osasuna", "2026-10-26T21:00:00+01:00"),
+]
+
 def ensure_j6(c):
     rr = sql(c, "SELECT id FROM rounds WHERE number=?", (6,)).fetchone()
     if rr:
@@ -221,6 +234,33 @@ def ensure_j9(c):
         (datetime.now(timezone.utc).isoformat(), J9_FIXTURES[-1][2], rid))
     return rid
 
+def ensure_j10(c):
+    """Prepare Jornada 10 while preserving existing match IDs and bets."""
+    rr = sql(c, "SELECT id FROM rounds WHERE number=?", (10,)).fetchone()
+    if rr:
+        rid = rr["id"] if hasattr(rr, "keys") else rr[0]
+    else:
+        cur = sql(c,
+            "INSERT INTO rounds(number,name,open,synced_at,close_at) VALUES(?,?,?,?,?) RETURNING id",
+            (10, "Jornada 10", True, datetime.now(timezone.utc).isoformat(), J10_FIXTURES[-1][2]))
+        rid = cur.fetchone()[0]
+
+    for no, (home, away, kickoff) in enumerate(J10_FIXTURES, 1):
+        existing = sql(c, "SELECT id, home, away FROM matches WHERE round_id=? AND match_order=?", (rid, no)).fetchone()
+        if existing:
+            eh = existing["home"] if hasattr(existing, "keys") else existing[1]
+            ea = existing["away"] if hasattr(existing, "keys") else existing[2]
+            # Keep the existing row and its bets; only update kickoff when the
+            # teams already match exactly.
+            if eh == home and ea == away:
+                sql(c, "UPDATE matches SET kickoff=? WHERE round_id=? AND match_order=?", (kickoff, rid, no))
+        else:
+            sql(c, "INSERT INTO matches(round_id,match_order,home,away,kickoff,status) VALUES(?,?,?,?,?,'STATUS_SCHEDULED')",
+                (rid, no, home, away, kickoff))
+    sql(c, "UPDATE rounds SET synced_at=?, close_at=? WHERE id=?",
+        (datetime.now(timezone.utc).isoformat(), J10_FIXTURES[-1][2], rid))
+    return rid
+
 def ensure_j5(c):
     rr = sql(c, "SELECT id FROM rounds WHERE number=?", (5,)).fetchone()
     if rr:
@@ -334,6 +374,7 @@ def init_db():
     ensure_j7(c)
     ensure_j8(c)
     ensure_j9(c)
+    ensure_j10(c)
     c.commit(); c.close()
 
 def current_user():
@@ -513,6 +554,9 @@ def get_current_round(c):
     """
     ensure_j6(c)
     ensure_j7(c)
+    ensure_j8(c)
+    ensure_j9(c)
+    ensure_j10(c)
     c.commit()
 
     # Prefer the highest prepared round that has at least one match not yet
